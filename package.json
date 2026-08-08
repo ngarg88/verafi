@@ -1,0 +1,11 @@
+{
+  "name": "agentpay",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test packages/core/test/*.test.js",
+    "dev": "node apps/api/server.js",
+    "smoke": "node apps/api/smoke.js"
+  }
+}

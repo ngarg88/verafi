@@ -1,0 +1,27 @@
+VERAFI  ·  build v4  ·  2026-08-08
+==================================
+
+THIS IS THE ONE TO USE. Delete every other verafi zip you have.
+
+How to tell them apart after extracting: open VERSION.txt (this file).
+If it doesn't say v4, it's an old copy.
+
+WHAT CHANGED IN v4
+  - No GitHub CLI, no git, no .bat file. The server downloads this zip directly.
+  - cloud-init.yaml already contains your repo address - one less value to fill in.
+  - You now need only THREE values, not four:
+        TS_AUTHKEY, APP_PASSCODE, NTFY_TOPIC
+  - Removed the Windows helper scripts. Nothing in here needs to be run on your PC.
+
+WHAT TO DO WITH THIS FILE
+  1. Upload it to  https://github.com/ngarg88/verafi  keeping the name EXACTLY:
+         verafi-app-v4.zip
+     (the server fetches that exact filename - renaming it breaks the install)
+  2. Open SETUP-GUIDE.md and start at PART 4.
+
+WHAT'S INSIDE
+  cloud-init.yaml   the file you paste into Oracle (edit 3 lines)
+  SETUP-GUIDE.md    step-by-step instructions
+  verafi/           the app itself
+  packages/         shared logic, with its test suite
+  *.md              architecture, strategy and deployment notes

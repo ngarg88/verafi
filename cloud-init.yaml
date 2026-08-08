@@ -1,0 +1,91 @@
+#cloud-config
+# ============================================================================
+# Verafi · Oracle Cloud Always Free + Tailscale
+#
+# Paste this ENTIRE file into the Oracle "Create instance" page under
+#   Show advanced options → Management → Paste cloud-init script
+#
+# Edit the FOUR lines marked EDIT ME. Everything else is automatic.
+#
+# Networking note: this deliberately does NOT expose anything to the public
+# internet. The app binds to localhost + your private Tailscale network only.
+# Your bank data is reachable from your phone and from nowhere else.
+# ============================================================================
+write_files:
+  - path: /etc/verafi.env
+    permissions: '0600'
+    content: |
+      # ================= EDIT ME (4 lines) =================
+      ZIP_URL=https://raw.githubusercontent.com/ngarg88/verafi/main/verafi-app-v4.zip
+      TS_AUTHKEY=tskey-auth-PASTE-YOURS-HERE
+      APP_PASSCODE=pick-something-long-you-will-remember
+      NTFY_TOPIC=verafi-pick-something-random-here
+      # =====================================================
+      PORT=8788
+      HOST=0.0.0.0
+      DATA_DIR=/var/lib/verafi
+      AGENT_INTERVAL_HOURS=24
+      AUTO_ENABLE_AGENTS=1
+      # Add Plaid later:  sudo nano /etc/verafi.env && sudo systemctl restart verafi
+      PLAID_CLIENT_ID=
+      PLAID_SECRET=
+      PLAID_ENV=sandbox
+
+  - path: /usr/local/bin/verafi-bootstrap.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euxo pipefail
+      set -a; source /etc/verafi.env; set +a
+
+      echo "==> [1/5] node 22"
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      apt-get install -y nodejs unzip
+
+      echo "==> [2/5] tailscale (private network, no public exposure)"
+      curl -fsSL https://tailscale.com/install.sh | sh
+      tailscale up --authkey="$TS_AUTHKEY" --hostname=verafi --ssh
+      TS_IP=$(tailscale ip -4 | head -1)
+
+      echo "==> [3/5] app"
+      rm -rf /opt/verafi /tmp/app.zip /tmp/unpack
+      curl -fsSL "$ZIP_URL" -o /tmp/app.zip
+      mkdir -p /tmp/unpack && unzip -q /tmp/app.zip -d /tmp/unpack
+      mv /tmp/unpack/verafi-app* /opt/verafi
+      mkdir -p /var/lib/verafi /opt/verafi/verafi/statements
+      echo "SESSION_SECRET=$(openssl rand -hex 32)" >> /etc/verafi.env
+      id verafi >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin verafi
+      chown -R verafi:verafi /var/lib/verafi /opt/verafi
+
+      echo "==> [4/5] service"
+      cat >/etc/systemd/system/verafi.service <<'UNIT'
+      [Unit]
+      Description=Verafi
+      After=network-online.target tailscaled.service
+      [Service]
+      User=verafi
+      WorkingDirectory=/opt/verafi
+      EnvironmentFile=/etc/verafi.env
+      ExecStart=/usr/bin/node verafi/server.js
+      Restart=always
+      RestartSec=5
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ReadWritePaths=/var/lib/verafi /opt/verafi/verafi/statements
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+      systemctl daemon-reload && systemctl enable --now verafi
+
+      echo "==> [5/5] firewall: allow ONLY the tailscale interface"
+      iptables -I INPUT 1 -i tailscale0 -p tcp --dport 8788 -j ACCEPT
+      netfilter-persistent save 2>/dev/null || true
+
+      sleep 8
+      curl -s -H "Title: Verafi is live" \
+           -d "Open http://verafi:8788 on your phone (Tailscale must be connected). Unlock with your passcode. Tailnet IP: $TS_IP" \
+           "https://ntfy.sh/$NTFY_TOPIC" || true
+      echo "LIVE: http://verafi:8788   (tailnet ip $TS_IP)"
+
+runcmd:
+  - bash /usr/local/bin/verafi-bootstrap.sh 2>&1 | tee /var/log/verafi-setup.log

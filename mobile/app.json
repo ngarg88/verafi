@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "agentpay",
+    "slug": "agentpay",
+    "scheme": "agentpay",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "com.YOURORG.agentpay",
+      "supportsTablet": false,
+      "config": { "usesNonExemptEncryption": false },
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Face ID signs each purchase you approve. Your key never leaves this device."
+      }
+    },
+    "android": { "package": "com.YOURORG.agentpay" },
+    "plugins": [
+      "expo-router",
+      ["expo-local-authentication", { "faceIDPermission": "Face ID signs each purchase you approve." }],
+      "expo-secure-store"
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "agentpay-mobile",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "build:ios": "eas build --platform ios --profile preview",
+    "submit:ios": "eas submit --platform ios"
+  },
+  "dependencies": {
+    "expo": "~52.0.0",
+    "expo-router": "~4.0.0",
+    "expo-local-authentication": "~15.0.0",
+    "expo-secure-store": "~14.0.0",
+    "expo-crypto": "~14.0.0",
+    "expo-web-browser": "~14.0.0",
+    "react": "18.3.1",
+    "react-native": "0.76.5",
+    "@supabase/supabase-js": "^2.45.0",
+    "react-native-plaid-link-sdk": "^11.11.0"
+  },
+  "devDependencies": { "typescript": "^5.6.0" }
+}

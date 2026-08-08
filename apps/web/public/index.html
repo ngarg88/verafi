@@ -1,0 +1,1314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Ledger — Agentic Payments Harness Prototype</title>
+<style>
+:root{
+  --paper:#F7F4EE; --card:#FFFFFF; --card2:#F2EEE5; --line:#E4DED1;
+  --ink:#15140F; --mut:#6C6658; --dim:#9C9484;
+  --save:#0E6F52; --spend:#A8480F; --spend2:#7C3A0C; --warn:#9A6E06; --dang:#A32D22; --info:#1F5C8C;
+  --shell:#EDE8DE; --sh:0 1px 2px rgba(30,24,10,.05),0 8px 24px -14px rgba(30,24,10,.14);
+  --shbig:0 30px 70px -34px rgba(30,24,10,.45);
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,ui-serif,serif;
+  --panel:var(--card); --panel2:var(--card2); --tx:var(--ink); --bg:var(--paper); --grad:var(--save);
+}
+body.dark{}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-font-smoothing:antialiased}
+body{background:var(--paper);color:var(--ink);font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;min-height:100vh;transition:background .25s,color .25s}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input{font-family:inherit}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+
+.stage{display:flex;gap:34px;justify-content:center;align-items:flex-start;padding:30px 26px 60px;flex-wrap:wrap}
+.brandbar{display:flex;align-items:center;gap:14px;padding:22px 30px 0;flex-wrap:wrap}
+.logo{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:-.3px;font-size:19px;font-family:var(--serif)}
+.logo .mk{width:26px;height:26px;border-radius:6px;background:var(--ink);display:grid;place-items:center;font-size:13px;color:var(--paper);font-weight:700;font-family:var(--serif)}
+.tagpill{font-size:11px;color:var(--mut);border:1px solid var(--line);padding:5px 11px;border-radius:5px;background:var(--card)}
+.brandbar .sp{flex:1}
+.pal{display:flex;gap:5px;align-items:center}
+.swatch{width:20px;height:20px;border-radius:5px;border:1px solid var(--line);outline:0 solid var(--ink);transition:outline-width .12s}
+.swatch.on{outline-width:2px;outline-offset:1px}
+.themebtn{font-size:11.5px;font-weight:600;border:1px solid var(--line);background:var(--card);padding:6px 13px;border-radius:5px;color:var(--mut)}
+.themebtn:hover{color:var(--ink)}
+
+.phone{width:392px;height:838px;background:var(--shell);border:1px solid var(--line);border-radius:40px;padding:11px;box-shadow:var(--shbig);position:relative;flex:0 0 auto}
+.screen{width:100%;height:100%;background:var(--paper);border-radius:31px;overflow:hidden;position:relative;display:flex;flex-direction:column}
+.notch{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:108px;height:24px;background:var(--shell);border-radius:0 0 14px 14px;z-index:40}
+.statusbar{display:flex;justify-content:space-between;padding:14px 22px 4px;font-size:11.5px;color:var(--mut);font-weight:600;z-index:41;position:relative}
+.body{flex:1;overflow-y:auto;overflow-x:hidden;padding:8px 18px 96px}
+.tabbar{position:absolute;bottom:0;left:0;right:0;height:72px;background:var(--card);border-top:1px solid var(--line);display:flex;align-items:center;padding:0 4px 10px;z-index:30}
+.tabbar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding-top:11px;font-size:9.5px;font-weight:600;color:var(--dim);letter-spacing:.2px}
+.tabbar button.on{color:var(--ink)}
+.tabbar button.on .ic{background:var(--card2)}
+.ic{width:34px;height:25px;border-radius:6px;display:grid;place-items:center;transition:background .15s}
+.ic svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+
+h1{font-size:29px;letter-spacing:-.6px;font-weight:500;line-height:1.14;font-family:var(--serif)}
+h2{font-size:13px;font-weight:600}
+.sec{margin:26px 0 9px;display:flex;align-items:center;justify-content:space-between}
+.sec .lbl{font-size:10px;text-transform:uppercase;letter-spacing:1.3px;color:var(--dim);font-weight:700}
+.sec .act{font-size:11.5px;color:var(--mut);font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px;box-shadow:var(--sh)}
+.muted{color:var(--mut)}
+.tiny{font-size:11px}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+.row{display:flex;align-items:center;gap:10px}
+.grow{flex:1}
+.badge{font-size:9.5px;font-weight:700;padding:3px 7px;border-radius:4px;letter-spacing:.5px;text-transform:uppercase;border:1px solid transparent}
+.b-save{background:color-mix(in srgb,var(--save) 10%,transparent);color:var(--save)}
+.b-spend{background:color-mix(in srgb,var(--spend) 10%,transparent);color:var(--spend)}
+.b-warn{background:color-mix(in srgb,var(--warn) 12%,transparent);color:var(--warn)}
+.b-dang{background:color-mix(in srgb,var(--dang) 10%,transparent);color:var(--dang)}
+.btn{background:var(--ink);color:var(--paper);font-weight:600;font-size:13.5px;padding:13px;border-radius:8px;width:100%;text-align:center;letter-spacing:.1px}
+.btn.ghost{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+.btn.grad{background:var(--save);color:#fff}
+body.dark .btn.grad{color:#0B120F}
+.btn:active{transform:scale(.99)}
+
+.hero{padding:14px 2px 0}
+.askwrap{margin-top:18px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 15px 11px;box-shadow:var(--sh);transition:border-color .2s}
+.askwrap:focus-within{border-color:var(--ink)}
+.askwrap input{width:100%;background:none;border:none;outline:none;color:var(--ink);font-size:15px}
+.askwrap input::placeholder{color:var(--dim)}
+.askrow{display:flex;align-items:center;gap:7px;margin-top:13px}
+.mode{font-size:11px;font-weight:600;padding:6px 11px;border-radius:5px;border:1px solid var(--line);color:var(--mut)}
+.mode.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.go{width:34px;height:34px;border-radius:7px;background:var(--ink);display:grid;place-items:center;color:var(--paper);font-weight:700;font-size:15px}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:13px}
+.chip{font-size:12px;padding:9px 12px;border-radius:7px;background:var(--card);border:1px solid var(--line);color:var(--mut);text-align:left}
+.chip:hover{color:var(--ink);border-color:var(--dim)}
+
+.strip{display:flex;gap:8px;margin-top:16px}
+.stat{flex:1;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;box-shadow:var(--sh)}
+.stat .n{font-size:19px;font-weight:600;letter-spacing:-.4px;margin-top:5px;font-family:var(--serif)}
+
+.runhead{display:flex;gap:10px;align-items:flex-start;margin-top:6px}
+.avatar{width:26px;height:26px;border-radius:6px;background:var(--ink);flex:0 0 auto;display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--paper);font-family:var(--serif)}
+.steps{margin-top:14px;border-left:1px solid var(--line);padding-left:16px;display:flex;flex-direction:column;gap:12px}
+.step{position:relative;font-size:12.5px;color:var(--mut);opacity:0;transform:translateY(4px);animation:fin .32s forwards}
+@keyframes fin{to{opacity:1;transform:none}}
+.step::before{content:"";position:absolute;left:-20.5px;top:4px;width:7px;height:7px;border-radius:50%;background:var(--line);border:2px solid var(--paper)}
+.step.done::before{background:var(--save)}
+.step.done{color:var(--ink)}
+.step .tool{font-size:10.5px;color:var(--dim);display:block;margin-top:3px}
+.spinner{display:inline-block;width:9px;height:9px;border:1.5px solid var(--line);border-top-color:var(--save);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px;margin-left:5px}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+.prod{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px;margin-top:9px;position:relative;overflow:hidden;box-shadow:var(--sh)}
+.prod.best{border-color:var(--save);box-shadow:0 0 0 1px var(--save),var(--sh)}
+.pthumb{width:44px;height:44px;border-radius:8px;background:var(--card2);display:grid;place-items:center;font-size:19px;flex:0 0 auto}
+.price{font-size:17px;font-weight:600;letter-spacing:-.3px;font-family:var(--serif)}
+.strike{color:var(--dim);text-decoration:line-through;font-size:12px;margin-left:6px}
+.why{margin-top:11px;padding-top:11px;border-top:1px solid var(--line);font-size:11.5px;color:var(--mut);line-height:1.6}
+.why b{color:var(--ink);font-weight:600}
+
+.scrim{position:absolute;inset:0;background:rgba(20,17,10,.42);backdrop-filter:blur(2px);z-index:50;opacity:0;pointer-events:none;transition:opacity .22s;border-radius:31px}
+.scrim.on{opacity:1;pointer-events:auto}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);border-radius:18px 18px 31px 31px;padding:10px 20px 26px;z-index:51;transform:translateY(110%);transition:transform .3s cubic-bezier(.3,.9,.3,1);max-height:88%;overflow-y:auto;box-shadow:0 -20px 50px -24px rgba(20,17,10,.4)}
+.sheet.on{transform:none}
+.grab{width:34px;height:4px;background:var(--line);border-radius:9px;margin:6px auto 16px}
+.kv{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid var(--line);font-size:13px}
+.kv:last-child{border-bottom:none}
+.kv .k{color:var(--mut)}
+.kv .v{font-weight:600}
+.guard{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:12px;font-size:11.5px;color:var(--mut);line-height:1.6}
+.ok{color:var(--save)}
+
+.li{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.li:last-child{border-bottom:none}
+.mlogo{width:34px;height:34px;border-radius:8px;background:var(--card2);display:grid;place-items:center;font-size:15px;flex:0 0 auto}
+.bar{height:5px;border-radius:3px;background:var(--card2);overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;border-radius:3px}
+.toggle{width:38px;height:22px;border-radius:99px;background:var(--line);position:relative;flex:0 0 auto;transition:background .2s;border:1px solid var(--line)}
+.toggle i{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.2);transition:.2s}
+.toggle.on{background:var(--save);border-color:var(--save)}
+.toggle.on i{left:18px;background:#fff}
+
+.console{width:460px;flex:0 0 auto;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;height:838px;box-shadow:var(--sh)}
+.chead{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:9px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--save);box-shadow:0 0 0 3px color-mix(in srgb,var(--save) 18%,transparent)}
+.clog{flex:1;overflow-y:auto;padding:14px 16px;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11px;line-height:1.75;background:var(--card2)}
+.clog .l{white-space:pre-wrap;word-break:break-word;color:var(--mut);opacity:0;animation:fin .25s forwards}
+.clog .l.req{color:var(--spend)}
+.clog .l.res{color:var(--save)}
+.clog .l.err{color:var(--dang)}
+.clog .l.sys{color:var(--dim)}
+.clog .l b{color:var(--ink);font-weight:600}
+.cfoot{border-top:1px solid var(--line);padding:11px 16px;font-size:10.5px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap}
+.legend{display:flex;gap:7px;align-items:center}
+.legend i{width:7px;height:7px;border-radius:2px;display:block}
+@media(max-width:920px){.console{display:none}}
+.footnote{max-width:1000px;margin:0 auto;padding:0 30px 50px;font-size:11.5px;color:var(--mut);line-height:1.75}
+.faceid{text-align:center;padding:22px 6px 8px}
+.fidbox{width:76px;height:76px;margin:0 auto 18px;border-radius:18px;border:2px solid var(--save);position:relative;display:grid;place-items:center;font-size:30px;overflow:hidden}
+.fidbox::after{content:"";position:absolute;left:0;right:0;height:2px;background:var(--save);box-shadow:0 0 10px var(--save);animation:scan 1.1s ease-in-out infinite}
+@keyframes scan{0%{top:8%}50%{top:88%}100%{top:8%}}
+.fidbox.ok{border-color:var(--save);animation:pop .3s ease}
+.fidbox.ok::after{display:none}
+@keyframes pop{0%{transform:scale(.85)}60%{transform:scale(1.06)}100%{transform:scale(1)}}
+
+</style>
+</head>
+<body>
+
+<div class="brandbar">
+  <div class="logo"><span class="mk">L</span> Ledger</div>
+  <span class="tagpill">Agentic payments harness · clickable prototype</span>
+  <div class="sp"></div>
+  <span class="pal" id="pal"></span>
+  <button class="themebtn" onclick="resetOnboarding()">↻ Replay onboarding</button>
+  <button class="themebtn" id="tbtn" onclick="toggleTheme()">☾ Dark</button>
+  <span class="tagpill">Simulated data — no real accounts or money</span>
+</div>
+
+<div class="stage">
+  <!-- ============ PHONE ============ -->
+  <div class="phone">
+    <div class="notch"></div>
+    <div class="screen">
+      <div class="statusbar"><span>9:41</span><button onclick="go('settings')" style="font-weight:600;color:var(--mut)">Accounts &amp; agents ⚙</button></div>
+      <div class="body" id="body"></div>
+
+      <div class="scrim" id="scrim" onclick="closeSheet()"></div>
+      <div class="sheet" id="sheet"></div>
+
+      <div class="tabbar" id="tabbar"></div>
+    </div>
+  </div>
+
+  <!-- ============ CONSOLE ============ -->
+  <div class="console">
+    <div class="chead">
+      <span class="dot"></span>
+      <div class="grow"><div style="font-size:12.5px;font-weight:650">Agent Harness — live trace</div>
+      <div class="tiny muted" style="margin-top:2px">Every tool call, mandate check and settlement event</div></div>
+      <button class="badge b-spend" onclick="clearLog()">clear</button>
+    </div>
+    <div class="clog" id="clog"></div>
+    <div class="cfoot">
+      <span class="legend"><i style="background:var(--spend)"></i>tool call</span>
+      <span class="legend"><i style="background:var(--save)"></i>result</span>
+      <span class="legend"><i style="background:var(--dim)"></i>system</span>
+      <span class="legend"><i style="background:var(--dang)"></i>blocked</span>
+    </div>
+  </div>
+</div>
+
+<div class="footnote">
+  <b style="color:var(--ink)">What this is.</b> A working front-end prototype of the agent harness: an ask-anything shopping agent, a <b style="color:var(--spend)">Spend</b> surface built on bank + merchant data, a <b style="color:var(--save)">Save</b> surface where the agent recovers money, and a <b>Pay</b> surface that routes across the user's own cards, bank and wallet — <b style="color:var(--ink)">holding no funds itself</b>. The right panel exposes the harness: tool calls, rail selection, mandate evaluation and settlement events that would run against Plaid / Knot / AP2 / a PSP in production. Try: tap a suggested prompt, approve a purchase, then check Spend, Save and Pay. Name is a placeholder.
+</div>
+
+<script>
+const THEMES = {
+  ink: {label:'Ink',
+    light:{paper:'#FBFBFD',card:'#FFFFFF',card2:'#F2F4F8',line:'#E2E5EC',shell:'#ECEFF4',
+           ink:'#0E1421',mut:'#596174',dim:'#949CAE',
+           save:'#0F766E',spend:'#4F46E5',spend2:'#4338CA',warn:'#B45309',dang:'#BE123C',info:'#0369A1'},
+    dark:{paper:'#0A0D14',card:'#131822',card2:'#1A2029',line:'#252C39',shell:'#191F29',
+          ink:'#E9ECF3',mut:'#98A1B4',dim:'#646D80',
+          save:'#2DD4BF',spend:'#8B93F8',spend2:'#A5B4FC',warn:'#FBBF24',dang:'#FB7185',info:'#38BDF8'}},
+  clay: {label:'Clay',
+    light:{paper:'#FAF8F6',card:'#FFFFFF',card2:'#F3EFEB',line:'#E7E0D9',shell:'#EFEAE5',
+           ink:'#1A1614',mut:'#6B6058',dim:'#A39992',
+           save:'#0D7A6B',spend:'#C2410C',spend2:'#9A3412',warn:'#A16207',dang:'#B91C1C',info:'#1D4ED8'},
+    dark:{paper:'#100D0B',card:'#1B1714',card2:'#241F1B',line:'#302923',shell:'#1F1A16',
+          ink:'#F2ECE6',mut:'#A79A90',dim:'#71675F',
+          save:'#3FC7B0',spend:'#F08A4B',spend2:'#E0763A',warn:'#E3B341',dang:'#E8776B',info:'#7AAEF5'}},
+  moss: {label:'Moss',
+    light:{paper:'#F6F7F3',card:'#FFFFFF',card2:'#EDEFE8',line:'#DFE3D8',shell:'#E9ECE2',
+           ink:'#151913',mut:'#5C6455',dim:'#98A08C',
+           save:'#2F6B4F',spend:'#6D5AAE',spend2:'#584794',warn:'#8A6508',dang:'#9E382B',info:'#2A6B8F'},
+    dark:{paper:'#0C0F0A',card:'#161A13',card2:'#1E231A',line:'#2A3024',shell:'#1A1F16',
+          ink:'#EDF0E7',mut:'#9AA48D',dim:'#68715C',
+          save:'#5FC793',spend:'#A996E8',spend2:'#BCAEF0',warn:'#D9B44A',dang:'#DE7A6C',info:'#69B0D6'}},
+  paper:{label:'Paper',
+    light:{paper:'#F7F4EE',card:'#FFFFFF',card2:'#F2EEE5',line:'#E4DED1',shell:'#EDE8DE',
+           ink:'#15140F',mut:'#6C6658',dim:'#9C9484',
+           save:'#0E6F52',spend:'#A8480F',spend2:'#7C3A0C',warn:'#9A6E06',dang:'#A32D22',info:'#1F5C8C'},
+    dark:{paper:'#100F0C',card:'#1A1815',card2:'#232019',line:'#2F2B23',shell:'#1F1C17',
+          ink:'#F3EFE6',mut:'#A39C8B',dim:'#726B5B',
+          save:'#4FC79B',spend:'#E08A4C',spend2:'#C9762F',warn:'#E0B44A',dang:'#E07B6B',info:'#6FB3E0'}}
+};
+let THEME='moss', MODE='light';
+function applyTheme(){
+  const p = THEMES[THEME][MODE], r = document.documentElement.style;
+  Object.keys(p).forEach(k=>r.setProperty('--'+k, p[k]));
+  r.setProperty('--panel',p.card); r.setProperty('--panel2',p.card2);
+  r.setProperty('--tx',p.ink); r.setProperty('--bg',p.paper); r.setProperty('--grad',p.save);
+  document.body.className = MODE==='dark' ? 'dark' : '';
+  const b=document.getElementById('tbtn'); if(b) b.innerHTML = MODE==='dark'?'☀ Light':'☾ Dark';
+  const s=document.getElementById('pal'); if(s) s.innerHTML = Object.keys(THEMES).map(k=>
+    `<button class="swatch ${k===THEME?'on':''}" title="${THEMES[k].label}" onclick="setTheme('${k}')"
+      style="background:linear-gradient(135deg,${THEMES[k][MODE].save} 0 50%,${THEMES[k][MODE].spend} 50% 100%)"></button>`).join('');
+}
+function setTheme(t){ THEME=t; applyTheme(); }
+function toggleTheme(){ MODE = MODE==='dark'?'light':'dark'; applyTheme(); }
+
+/* =========================================================
+   STATE
+   ========================================================= */
+const S = {
+  tab: 'ask',
+  view: 'home',          // home | results
+  query: '',
+  results: null,
+  savedTotal: 412.80,
+  monthSpend: 3184.22,
+  budget: 4200,
+  purchases: [],
+  savings: [
+    {t:'Cancelled duplicate cloud storage', m:'Dropbox Plus', a:119.88, tag:'Subscription audit', d:'Aug 2'},
+    {t:'Repriced auto insurance after quote scan', m:'Root', a:186.00, tag:'Negotiation', d:'Jul 24'},
+    {t:'Routed grocery run to 5% card', m:'Whole Foods', a:31.40, tag:'Card routing', d:'Jul 19'},
+    {t:'Waited 6 days for price drop', m:'Sony WH-1000XM6', a:75.52, tag:'Price watch', d:'Jul 11'}
+  ],
+  watches: [
+    {n:'Dyson Airwrap i.d.', now:549, target:479, prob:71, e:'🌀'},
+    {n:'Delta SFO→NRT · Nov 12', now:842, target:690, prob:48, e:'✈️'},
+    {n:'Herman Miller Aeron', now:1395, target:1150, prob:33, e:'🪑'}
+  ],
+  subs: [
+    {n:'Netflix Premium', a:24.99, s:'Used 2x last month', risk:'high', e:'🎬'},
+    {n:'Adobe Creative Cloud', a:59.99, s:'Renews Aug 21 · price up 12%', risk:'med', e:'🎨'},
+    {n:'Equinox', a:305.00, s:'4 visits in 90 days', risk:'high', e:'🏋️'},
+    {n:'Spotify Family', a:19.99, s:'Used daily', risk:'ok', e:'🎧'}
+  ],
+  cats: [
+    {n:'Dining & delivery', a:842.10, c:'var(--spend)', e:'🍜'},
+    {n:'Groceries', a:614.55, c:'var(--save)', e:'🛒'},
+    {n:'Travel', a:588.00, c:'var(--warn)', e:'✈️'},
+    {n:'Subscriptions', a:409.97, c:'var(--info)', e:'🔁'},
+    {n:'Shopping', a:398.60, c:'var(--dang)', e:'🛍️'},
+    {n:'Everything else', a:331.00, c:'var(--dim)', e:'•'}
+  ],
+  connections: [
+    {n:'Chase · Sapphire Reserve', s:'Bank + card · via Plaid', on:true, e:'🏦'},
+    {n:'Amex Gold', s:'Card · via Plaid', on:true, e:'💳'},
+    {n:'Merchant logins (Amazon, Uber, DoorDash +38)', s:'Card-on-file · via Knot', on:true, e:'🔗'},
+    {n:'Gmail receipts', s:'Order + warranty parsing', on:true, e:'✉️'},
+    {n:'Robinhood', s:'Sweep destination for savings', on:false, e:'📈'}
+  ],
+  mandate: {perTx: 500, daily: 1200, monthly: 4000, autoUnder: 75, categories:'Retail, travel, groceries, subscriptions', blocked:'Crypto, gambling, gift cards, P2P'},
+  spentToday: 0,
+  linked: true,
+
+  /* ---- preset + custom agents, one set per surface ---- */
+  agents: {
+    ask: [
+      {e:'🏷️', n:'Deal Hunter',      d:'Checks 14 merchants, coupons and cashback before any buy', on:true,  rec:false},
+      {e:'⏳', n:'Price Patience',    d:'Holds non-urgent buys up to 10 days if a drop is likely',   on:true,  rec:true, why:'8 of your last 11 electronics purchases dropped after you bought'},
+      {e:'🔁', n:'Restock Runner',    d:'Reorders staples when you run out, at the 90-day low',      on:false, rec:true, why:'You reorder paper goods every 5.2 weeks like clockwork'},
+      {e:'✈️', n:'Fare Watcher',      d:'Tracks flights you looked at and rebooks on a drop',        on:false, rec:false}
+    ],
+    spend: [
+      {e:'🧾', n:'Fee Catcher',       d:'Flags overdraft, ATM and FX fees, then disputes them',      on:true,  rec:true, why:'$84 in avoidable fees found in your last 18 months'},
+      {e:'👀', n:'Duplicate Watch',   d:'Catches double-charges and pending/posted mismatches',      on:true,  rec:false},
+      {e:'📊', n:'Budget Pacer',      d:'Warns when a category will overrun before it does',         on:true,  rec:false},
+      {e:'🌙', n:'Late-Night Guard',  d:'Caps delivery orders placed after 9pm',                     on:false, rec:true, why:'62% of your DoorDash orders are after 9pm and you rate them 2.8/5'}
+    ],
+    save: [
+      {e:'🔁', n:'Subscription Auditor', d:'Finds what you stopped using and cancels it',            on:true,  rec:true, why:'3 subscriptions unused for 30+ days right now'},
+      {e:'💳', n:'Card Router',          d:'Tells you the right card per merchant, per category',    on:true,  rec:true, why:'$2,140 spent on a 1x card where you hold a 4x card'},
+      {e:'📞', n:'Bill Negotiator',      d:'Requests better rates on insurance, internet, phone',    on:false, rec:false},
+      {e:'🔒', n:'Sweep',                d:'Moves recovered cash to your own high-yield account',    on:false, rec:false}
+    ]
+  },
+
+
+  /* ---- connected instruments — Ledger holds NO funds. Read + initiate only. ---- */
+  rails: [
+    {id:'amex', n:'Amex Gold ···4021',  s:'Your credit card · 4x dining/grocery', bal:null,    e:'💳', via:'Network token (Visa/MC agent credential)', cost:'0%',    speed:'instant', prot:'Full chargeback',    c:'var(--spend)', live:true},
+    {id:'csr',  n:'Sapphire ···9930',   s:'Your credit card · 3x travel',         bal:null,    e:'💳', via:'Network token',                           cost:'0%',    speed:'instant', prot:'Full chargeback',    c:'var(--spend2)', live:true},
+    {id:'debit',n:'Chase debit ···1187',s:'Your checking · balance read-only',    bal:8412.09, e:'🏦', via:'Plaid Auth + Balance',                     cost:'0%',    speed:'instant', prot:'Reg E limited',      c:'var(--save)', live:true},
+    {id:'ach',  n:'ACH from Chase ···1187',s:'Your bank · bill pay rail',         bal:null,    e:'🏛️', via:'Plaid Transfer (bank-initiated)',          cost:'$0',    speed:'1-3 days',prot:'Reversal window',    c:'var(--warn)', live:true},
+    {id:'usdc', n:'Coinbase Wallet',    s:'Your self-custody wallet · Base',      bal:1240.55, e:'⬡', via:'Wallet connect · you sign',                cost:'0.02%', speed:'~2s',     prot:'None (irreversible)',c:'var(--info)', live:true},
+    {id:'vault',n:'Marcus HYSA ···5540',s:'Your savings · sweep destination',     bal:310.00,  e:'🔒', via:'Plaid Transfer to your own account',       cost:'—',     speed:'1-2 days',prot:'FDIC (your bank)',   c:'var(--save)', live:true}
+  ],
+  agentBudget: {cap: 25.00, used: 3.42},   // paid by Ledger as COGS — never from user funds
+
+  /* ---- learned presets ---- */
+  presets: [
+    {t:'Never pay for expedited shipping', s:'You returned 0 of 41 orders for lateness. Saves ~$14/mo.', conf:0.93, on:true},
+    {t:'Buy household staples only at 90-day-low', s:'You reorder paper goods every 5.2 weeks — timing is free.', conf:0.88, on:true},
+    {t:'Hold non-urgent electronics up to 10 days', s:'8 of your last 11 electronics purchases dropped after buy.', conf:0.81, on:true},
+    {t:'Cap weeknight delivery at $35', s:'62% of DoorDash orders after 9pm; you rate them 2.8/5.', conf:0.74, on:false},
+    {t:'Default to USDC for digital goods', s:'Saves 1.9% FX + fees on your 6 overseas SaaS vendors.', conf:0.69, on:false}
+  ],
+
+  /* ---- programmatic purchase rules ---- */
+  rules: [
+    {n:'Coffee beans auto-reorder', when:'Stock runs out (~every 24d)', cap:32, rail:'amex', merch:'Blue Bottle, Onyx', max:'2/mo', on:true, runs:7, e:'☕', signed:'Jun 14'},
+    {n:'Flight auto-buy', when:'SFO→NRT nonstop under $690', cap:690, rail:'csr', merch:'ANA, JAL, United', max:'1', on:true, runs:0, e:'✈️', signed:'Aug 1'},
+    {n:'Grocery basket', when:'Every Saturday 8am', cap:200, rail:'amex', merch:'Costco, Trader Joe\'s', max:'1/wk', on:true, runs:19, e:'🛒', signed:'Mar 29'},
+    {n:'API credits top-up', when:'Balance under $20', cap:50, rail:'usdc', merch:'Any x402 endpoint', max:'$50/mo', on:true, runs:31, e:'⬡', signed:'Feb 8'},
+    {n:'Price-drop sweep', when:'Watchlist item hits target', cap:500, rail:'auto', merch:'Trusted only (≥0.85)', max:'3/mo', on:false, runs:4, e:'👀', signed:'Jul 22'}
+  ],
+
+  /* ---- 12-month forecast ---- */
+  forecast: {
+    baseline: [3184,3210,3260,3305,3340,3380,3410,3450,3480,3510,3540,3570],
+    withAgent:[3184,3062,2948,2871,2820,2786,2762,2748,2736,2728,2722,2718],
+    byCat: [
+      {n:'Subscriptions', now:409.97, proj:214.99, conf:0.91, how:'Cancel 3 dead, downgrade Adobe'},
+      {n:'Dining & delivery', now:842.10, proj:610.00, conf:0.62, how:'Weeknight cap + agent reorders groceries'},
+      {n:'Groceries', now:614.55, proj:498.20, conf:0.84, how:'Basket split Costco/TJ + 4x card'},
+      {n:'Travel', now:588.00, proj:498.00, conf:0.47, how:'Fare timing + auto-rebook on drops'},
+      {n:'Shopping', now:398.60, proj:312.40, conf:0.71, how:'Price-drop hold + coupon stack'}
+    ]
+  }
+};
+
+const money = n => '$' + n.toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
+const m0 = n => '$' + Math.round(n).toLocaleString('en-US');
+
+/* =========================================================
+   CONSOLE
+   ========================================================= */
+const clog = document.getElementById('clog');
+function log(kind, text, delay=0){
+  setTimeout(()=>{
+    const d = document.createElement('div');
+    d.className = 'l ' + kind;
+    d.innerHTML = text;
+    clog.appendChild(d);
+    clog.scrollTop = clog.scrollHeight;
+  }, delay);
+}
+function clearLog(){ clog.innerHTML=''; boot(); }
+function boot(){
+  log('sys','<b>ledger-harness</b> v0.4 · session sess_9f2ac · user usr_neel');
+  log('sys','policy engine loaded · 3 mandates active · risk model v12');
+  log('res','ready — awaiting intent');
+}
+boot();
+
+/* =========================================================
+   ICONS
+   ========================================================= */
+const ICON = {
+  ask:'<path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"/><path d="m21 21-4.3-4.3"/>',
+  spend:'<path d="M2 8.5h20"/><rect x="2" y="4.5" width="20" height="15" rx="3"/><path d="M6 15.5h4"/>',
+  save:'<path d="M12 3v18"/><path d="M17 7.5c0-2-2.2-3-5-3s-5 1-5 3 2.2 2.7 5 3.3 5 1.4 5 3.4-2.2 3.3-5 3.3-5-1.2-5-3.2"/>',
+  wallet:'<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18a2 2 0 0 1 2 2v1"/><rect x="3" y="8" width="18" height="11" rx="2.5"/><circle cx="16.5" cy="13.5" r="1.3"/>',
+  agent:'<path d="M12 3 4 6.5v5c0 4.4 3.2 8.3 8 9.5 4.8-1.2 8-5.1 8-9.5v-5L12 3Z"/><path d="m9 12 2 2 4-4"/>'
+};
+const TABS = [['ask','Ask'],['spend','Spend'],['save','Save']];   // MVP surface
+function renderTabs(){
+  document.getElementById('tabbar').innerHTML = TABS.map(([k,l])=>`
+    <button class="${S.tab===k?'on':''}" onclick="go('${k}')">
+      <span class="ic"><svg viewBox="0 0 24 24">${ICON[k]}</svg></span>${l}</button>`).join('');
+}
+function go(t){ S.tab=t; if(t==='ask'&&S.view==='results'){} render(); document.getElementById('body').scrollTop=0; }
+
+/* =========================================================
+   CATALOG (simulated agent search results)
+   ========================================================= */
+const CATALOG = {
+  'default': {
+    title:'Options found',
+    items:[
+      {e:'📦', n:'Best available match', m:'Multiple merchants', p:129.00, was:159.00, ship:'2-day', best:true,
+       why:'Cheapest verified in-stock unit across 14 merchants. <b>Amex Gold</b> gives 4x here (~$5.16 back).'},
+      {e:'📦', n:'Runner-up', m:'Alternate merchant', p:134.50, was:159.00, ship:'Next day', best:false,
+       why:'Faster shipping, $5.50 more. Chosen only if you need it by Friday.'}
+    ]
+  },
+  'headphones': {
+    title:'Noise-cancelling headphones under $300',
+    items:[
+      {e:'🎧', n:'Sony WH-1000XM6', m:'Amazon · sold by Amazon', p:278.00, was:399.99, ship:'Tomorrow', best:true,
+       why:'Lowest verified price in 90 days (30-day median <b>$348</b>). Stacks a $40 clipped coupon. Route to <b>Amex Gold</b> — 4x on this MCC ≈ <b>$11.12</b> back. Effective <b>$266.88</b>.'},
+      {e:'🎧', n:'Bose QuietComfort Ultra', m:'Best Buy', p:299.00, was:429.00, ship:'Pickup today', best:false,
+       why:'Better call quality, worse ANC in tests. Price-match window closes Sunday.'},
+      {e:'🎧', n:'Sony WH-1000XM5 (renewed)', m:'Woot', p:189.00, was:349.99, ship:'3-5 days', best:false,
+       why:'Saves $89 more but 90-day warranty only. Flagged: returns window is 14 days.'}
+    ]
+  },
+  'flight': {
+    title:'SFO → Tokyo, mid-November',
+    items:[
+      {e:'✈️', n:'ANA · SFO-HND nonstop', m:'ANA direct', p:842.00, was:1120.00, ship:'Nov 12 · 11h05', best:true,
+       why:'Cheapest nonstop. Fare history says <b>48% chance</b> it drops ~$150 in 10 days — agent can hold and rebook. <b>Sapphire Reserve</b> = 3x travel + trip delay cover.'},
+      {e:'✈️', n:'United · 1 stop LAX', m:'United', p:731.00, was:980.00, ship:'Nov 12 · 15h40', best:false,
+       why:'$111 cheaper, +4h40m. Below your stated 13h ceiling? No — flagged for your review.'},
+      {e:'✈️', n:'JAL · SFO-NRT nonstop', m:'Expedia', p:868.00, was:1090.00, ship:'Nov 12 · 11h30', best:false,
+       why:'Best cabin per your past ratings. $26 premium over ANA.'}
+    ]
+  },
+  'groceries': {
+    title:'Weekly grocery run — optimized',
+    items:[
+      {e:'🛒', n:'Split basket: Costco + Trader Joe\'s', m:'Instacart + pickup', p:184.20, was:241.60, ship:'Sat pickup', best:true,
+       why:'Same 34 items. Moving 9 staples to Costco saves <b>$44.10</b>; TJ\'s produce saves <b>$13.30</b>. Pay with <b>Amex Gold</b> (4x groceries ≈ $7.37 back).'},
+      {e:'🛒', n:'Single basket: Whole Foods delivery', m:'Amazon Fresh', p:241.60, was:241.60, ship:'2h', best:false,
+       why:'What you normally do. Convenience premium: <b>$57.40/week</b> ≈ $2,985/yr.'}
+    ]
+  },
+  'subscription': {
+    title:'Subscription audit',
+    items:[
+      {e:'🔁', n:'Cancel Netflix Premium + downgrade Adobe', m:'2 merchants', p:0, was:84.98, ship:'Effective next cycle', best:true,
+       why:'Netflix: 2 sessions in 30 days. Adobe: you use Photoshop only — Photography plan is <b>$19.99</b>. Net save <b>$64.99/mo · $779.88/yr</b>. Agent will execute both cancellations and confirm by email.'}
+    ]
+  }
+};
+function pickCatalog(q){
+  const s = q.toLowerCase();
+  if(/head|audio|earbud|sony|bose|noise/.test(s)) return CATALOG.headphones;
+  if(/flight|fly|tokyo|trip|travel|ticket|japan/.test(s)) return CATALOG.flight;
+  if(/grocer|food|costco|trader|weekly shop/.test(s)) return CATALOG.groceries;
+  if(/subscri|cancel|recurring|netflix|audit/.test(s)) return CATALOG.subscription;
+  return CATALOG.headphones;
+}
+
+/* =========================================================
+   AGENT RUN
+   ========================================================= */
+const STEPS = [
+  {t:'Parsing intent and constraints', tool:'llm.plan()', ms:600,
+   logs:[['req','→ <b>llm.plan</b>({intent, budget_ctx, prefs})'],['res','← plan: 5 steps · needs: catalog, price_history, card_rules, mandate']]},
+  {t:'Reading your spending context', tool:'plaid.transactions.sync · 18mo', ms:750,
+   logs:[['req','→ <b>plaid.transactions.sync</b>({cursor, accounts:2})'],['res','← 3,411 tx · enriched · budget headroom $1,015.78'],['req','→ <b>ledger.profile.get</b>({user})'],['res','← price_sensitivity: high · brand_loyalty: low · returns_rate: 4%']]},
+  {t:'Searching merchants and live inventory', tool:'catalog.search · 14 merchants', ms:950,
+   logs:[['req','→ <b>catalog.search</b>({q, in_stock:true, merchants:14})'],['res','← 27 offers · 6 verified in-stock'],['req','→ <b>price.history</b>({skus:[6], window:"90d"})'],['res','← median $348.00 · p10 $276.00 · trend ↓']]},
+  {t:'Stacking coupons, cashback and card rewards', tool:'deals.resolve + card.optimize', ms:800,
+   logs:[['req','→ <b>deals.resolve</b>({sku, geo:"US-CA"})'],['res','← 1 clippable coupon -$40.00 · 1 portal 2% · 0 expired'],['req','→ <b>card.optimize</b>({mcc:5732, amount:278.00})'],['res','← best: Amex Gold 4x ≈ $11.12 · beats Sapphire 1x by $8.34']]},
+  {t:'Checking your mandate and risk rules', tool:'policy.evaluate', ms:650,
+   logs:[['req','→ <b>policy.evaluate</b>({amount, merchant, category})'],['res','← per_tx $500 ok · daily $1,200 ok · merchant trust 0.94 · <b>requires_human: true</b>']]}
+];
+
+let RUNNING = false;
+function runAgent(q){
+  if(RUNNING) return;
+  S.query = q; S.view='results'; S.results=null; S.tab='ask'; RUNNING=true;
+  S.stepIdx = 0;
+  render();
+  log('sys','──────────────────────────────────');
+  log('sys','intent: "'+q.replace(/</g,'&lt;')+'"');
+  let acc = 0;
+  STEPS.forEach((st,i)=>{
+    st.logs.forEach((l,j)=> log(l[0], l[1], acc + 120*j));
+    acc += st.ms;
+    setTimeout(()=>{ S.stepIdx = i+1; if(S.view==='results') render(); }, acc);
+  });
+  setTimeout(()=>{
+    S.results = pickCatalog(q);
+    RUNNING = false;
+    log('res','← <b>3 ranked options</b> returned · projected save $121.99 · awaiting user approval');
+    render();
+  }, acc + 500);
+}
+
+/* =========================================================
+   VIEWS
+   ========================================================= */
+function viewAsk(){
+  if(S.view==='results') return viewResults();
+  return `
+  <div class="hero">
+    <h1>Ask for anything.<br/><span class="muted">The agent buys it for less.</span></h1>
+    <div class="askwrap">
+      <input id="q" placeholder="Find me noise-cancelling headphones under $300"
+        onkeydown="if(event.key==='Enter')submitQ()"/>
+      <div class="askrow">
+        <span class="mode on">Buy</span>
+        <span class="mode">Compare</span>
+        <span class="mode">Watch</span>
+        <span class="grow"></span>
+        <button class="go" onclick="submitQ()">↑</button>
+      </div>
+    </div>
+    <div class="chips">
+      ${['Noise-cancelling headphones under $300','Cheapest nonstop SFO → Tokyo in November','Cut my weekly grocery bill','Audit my subscriptions and cancel the dead ones']
+        .map(c=>`<button class="chip" onclick="runAgent(\`${c}\`)">${c}</button>`).join('')}
+    </div>
+
+    ${!S.linked ? `<div class="card" style="margin-top:16px;border-color:var(--save)">
+      <div style="font-size:14px;font-weight:700">Link your accounts to switch the agents on</div>
+      <div class="tiny muted" style="margin-top:7px;line-height:1.6">One Plaid connection reads 18 months of history. From that the app learns how you actually buy — and turns those patterns into presets across Ask, Spend and Save. Read-only until you authorize something.</div>
+      <button class="btn grad" style="margin-top:13px" onclick="openPlaidLink()">Connect with Plaid</button>
+    </div>` : ''}
+
+    <div class="strip">
+      <div class="stat"><div class="tiny muted">Saved this year</div><div class="n" style="color:var(--save)">${m0(S.savedTotal)}</div></div>
+      <div class="stat"><div class="tiny muted">Spent in Aug</div><div class="n">${m0(S.monthSpend)}</div></div>
+      <div class="stat"><div class="tiny muted">Agent tasks</div><div class="n">7 <span class="tiny muted" style="font-weight:500">live</span></div></div>
+    </div>
+
+    ${agentsSection('ask')}
+
+    <div class="sec"><span class="lbl">Running right now</span><span class="act">All</span></div>
+    <div class="card">
+      ${[['👀','Watching Dyson Airwrap','Buys automatically at $479 — $70 below today','var(--save)'],
+         ['🧾','Disputing Uber double-charge','Filed Aug 4 · merchant has 6 days','var(--warn)'],
+         ['🔁','Adobe renews in 14 days','Agent found Photography plan at $19.99','var(--spend)']]
+        .map(([e,t,s,c],i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+          <div class="mlogo">${e}</div>
+          <div class="grow"><div style="font-size:13px;font-weight:600">${t}</div>
+          <div class="tiny muted" style="margin-top:3px">${s}</div></div>
+          <span style="color:${c};font-size:16px">›</span></div>`).join('')}
+    </div>
+
+    <div class="sec"><span class="lbl">Why people switch</span></div>
+    <div class="card" style="background:linear-gradient(160deg,color-mix(in srgb,var(--spend) 6%,transparent),color-mix(in srgb,var(--save) 4%,transparent)),var(--panel)">
+      <div style="font-size:13.5px;line-height:1.6">Ledger reads what you actually spend, then <b>negotiates, routes and times</b> every purchase. Average member recovers <b style="color:var(--save)">$1,840/yr</b> without changing what they buy.</div>
+      <div class="tiny muted" style="margin-top:10px">Illustrative figure for this prototype.</div>
+    </div>
+
+    <div class="sec"><span class="lbl">Coming — Ledger Exchange</span><span class="badge b-spend">V2</span></div>
+    <div class="card" style="border-style:dashed">
+      <div style="font-size:13.5px;font-weight:650">A marketplace where merchants sell <i>to agents</i>, not to browsers.</div>
+      <div class="tiny muted" style="margin-top:9px;line-height:1.65">
+        Sellers publish machine-readable offers — price, inventory, return terms, accepted rails — and bid for a slot in your agent's decision. You still pay us, not them, so the ranking stays honest: <b style="color:var(--tx)">bids move inventory, never rank</b>.
+      </div>
+      <div class="row" style="margin-top:12px;gap:6px;flex-wrap:wrap">
+        <span class="badge b-spend">Offer feed API</span>
+        <span class="badge b-spend">Agent-only pricing</span>
+        <span class="badge b-save">Reverse auction</span>
+        <span class="badge b-save">Settles in USDC or card</span>
+      </div>
+      <div class="tiny" style="color:var(--dim);margin-top:11px;line-height:1.6">Demand side first. 100k agents with signed mandates and known budgets is the asset merchants can't get anywhere else.</div>
+    </div>
+  </div>`;
+}
+
+function submitQ(){
+  const el = document.getElementById('q');
+  const v = (el && el.value.trim()) || 'Noise-cancelling headphones under $300';
+  runAgent(v);
+}
+
+function viewResults(){
+  const done = S.stepIdx || 0;
+  const stepsHtml = STEPS.map((s,i)=>{
+    if(i > done) return '';
+    const isDone = i < done;
+    return `<div class="step ${isDone?'done':''}" style="animation-delay:${i*.04}s">
+      ${s.t}${isDone?'':'<span class="spinner"></span>'}
+      <span class="tool mono">${s.tool}</span></div>`;
+  }).join('');
+
+  const r = S.results;
+  const resultsHtml = !r ? '' : `
+    <div class="sec"><span class="lbl">${r.title}</span><span class="act">Ranked for you</span></div>
+    ${r.items.map((it,i)=>`
+      <div class="prod ${it.best?'best':''}">
+        ${it.best?'<span class="badge b-save" style="position:absolute;top:14px;right:14px">AGENT PICK</span>':''}
+        <div class="row" style="align-items:flex-start">
+          <div class="pthumb">${it.e}</div>
+          <div class="grow" style="padding-right:${it.best?'70px':'0'}">
+            <div style="font-size:13.5px;font-weight:650;line-height:1.35">${it.n}</div>
+            <div class="tiny muted" style="margin-top:3px">${it.m} · ${it.ship}</div>
+            <div style="margin-top:7px"><span class="price">${it.p===0?'Save '+money(it.was)+'/mo':money(it.p)}</span>
+            ${it.p!==0?`<span class="strike">${money(it.was)}</span>`:''}</div>
+          </div>
+        </div>
+        <div class="why">${it.why}</div>
+        <div class="row" style="margin-top:12px;gap:8px">
+          <button class="btn ${it.best?'grad':'ghost'}" onclick="openApprove(${i})">${it.p===0?'Execute cancellations':'Buy with agent'}</button>
+          ${it.p!==0?`<button class="btn ghost" style="width:auto;padding:13px 15px" onclick="watchIt('${it.n.replace(/'/g,"")}',${it.p})">Watch</button>`:''}
+        </div>
+      </div>`).join('')}
+    <div class="card" style="margin-top:14px;border-style:dashed">
+      <div class="tiny muted" style="line-height:1.65">The agent never holds your card. It requests a <b style="color:var(--tx)">signed cart mandate</b> scoped to one merchant, one amount and a 15-minute window. You approve; the network issues a single-use token.</div>
+    </div>`;
+
+  return `
+  <div style="padding-top:6px">
+    <button class="tiny muted" onclick="S.view='home';render()" style="font-weight:600">← New search</button>
+    <div class="runhead" style="margin-top:14px">
+      <div class="avatar">L</div>
+      <div class="grow"><div style="font-size:15px;font-weight:650;line-height:1.35">${S.query}</div>
+      <div class="tiny muted" style="margin-top:4px">${RUNNING?'Agent running…':'Completed in 3.8s · 11 tool calls'}</div></div>
+    </div>
+    <div class="steps">${stepsHtml}</div>
+    ${resultsHtml}
+  </div>`;
+}
+
+function agentsSection(tab){
+  const list = S.agents[tab], on = list.filter(a=>a.on).length;
+  const recs = list.filter(a=>a.rec && !a.on).length;
+  return `
+    <div class="sec"><span class="lbl">Agents on this tab</span><span class="act">${on} of ${list.length} running</span></div>
+    ${recs? `<div class="card" style="border-color:var(--save);margin-bottom:8px">
+      <div class="row"><span class="ok" style="font-size:15px">✦</span>
+      <span class="tiny grow" style="line-height:1.55">${recs} more suggested from your linked accounts — each one cites what it saw.</span></div></div>`:''}
+    ${list.map((a,i)=>`
+      <div class="card" style="margin-top:8px;${a.on?'':'opacity:.62'}">
+        <div class="row" style="align-items:flex-start">
+          <div class="mlogo">${a.e}</div>
+          <div class="grow">
+            <div class="row" style="gap:6px"><span style="font-size:13.5px;font-weight:650">${a.n}</span>
+            ${a.custom?'<span class="badge b-spend">Yours</span>':''}
+            ${a.rec&&!a.on?'<span class="badge b-save">Suggested</span>':''}</div>
+            <div class="tiny muted" style="margin-top:4px;line-height:1.55">${a.d}</div>
+            ${a.why?`<div class="tiny" style="margin-top:7px;color:var(--dim);line-height:1.5"><b style="color:var(--mut)">Learned:</b> ${a.why}</div>`:''}
+          </div>
+          <div class="toggle ${a.on?'on':''}" onclick="toggleAgent('${tab}',${i})"><i></i></div>
+        </div>
+      </div>`).join('')}
+    <button class="btn ghost" style="margin-top:9px" onclick="openNewAgent('${tab}')">+ Build your own agent</button>`;
+}
+
+/* ---------- SPEND ---------- */
+function donut(){
+  const tot = S.cats.reduce((a,c)=>a+c.a,0);
+  let off = 0; const R=54, C=2*Math.PI*R;
+  const segs = S.cats.map(c=>{
+    const len = (c.a/tot)*C, s = `<circle r="${R}" cx="70" cy="70" fill="none" stroke="${c.c}" stroke-width="15"
+      stroke-dasharray="${len-3} ${C-len+3}" stroke-dashoffset="${-off}" stroke-linecap="round" transform="rotate(-90 70 70)"/>`;
+    off += len; return s;
+  }).join('');
+  return `<svg viewBox="0 0 140 140" style="width:140px;height:140px">${segs}
+    <text x="70" y="66" text-anchor="middle" fill="var(--mut)" font-size="9" font-family="sans-serif">AUGUST</text>
+    <text x="70" y="84" text-anchor="middle" fill="var(--ink)" font-size="17" font-weight="700" font-family="sans-serif">${m0(S.monthSpend)}</text></svg>`;
+}
+function forecastChart(){
+  const W=310,H=112,P=6, f=S.forecast;
+  const all=f.baseline.concat(f.withAgent), mn=Math.min(...all)*0.94, mx=Math.max(...all)*1.02;
+  const pt=(a)=>a.map((v,i)=>[P+i*(W-2*P)/(a.length-1), H-P-((v-mn)/(mx-mn))*(H-2*P)]);
+  const path=a=>pt(a).map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  const area=pt(f.withAgent), areaB=pt(f.baseline);
+  const fill='M'+areaB.map(p=>p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' L')+' L'+area.slice().reverse().map(p=>p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' L')+' Z';
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">
+    <defs><linearGradient id="fg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--save)" stop-opacity=".22"/><stop offset="100%" stop-color="var(--save)" stop-opacity="0"/></linearGradient></defs>
+    <path d="${fill}" fill="url(#fg)"/>
+    <path d="${path(f.baseline)}" fill="none" stroke="var(--dim)" stroke-width="1.6" stroke-dasharray="3 3"/>
+    <path d="${path(f.withAgent)}" fill="none" stroke="var(--save)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="${area[area.length-1][0]}" cy="${area[area.length-1][1]}" r="3.2" fill="var(--save)"/>
+    <text x="${P}" y="${H-1}" fill="var(--dim)" font-size="8" font-family="sans-serif">Aug 26</text>
+    <text x="${W-P}" y="${H-1}" fill="var(--dim)" font-size="8" text-anchor="end" font-family="sans-serif">Jul 27</text>
+  </svg>`;
+}
+
+function viewSpend(){
+  const tot = S.cats.reduce((a,c)=>a+c.a,0);
+  const pct = Math.round(S.monthSpend/S.budget*100);
+  return `
+  <div style="padding-top:10px">
+    <h1>Spend</h1>
+    <div class="tiny muted" style="margin-top:6px">2 accounts · 41 merchants · synced 4 min ago</div>
+
+    <div class="card" style="margin-top:18px;display:flex;gap:14px;align-items:center">
+      ${donut()}
+      <div class="grow">
+        ${S.cats.slice(0,5).map(c=>`<div class="row" style="margin-bottom:9px">
+          <span style="width:8px;height:8px;border-radius:2px;background:${c.c};flex:0 0 auto"></span>
+          <span class="tiny grow" style="color:var(--mut)">${c.n}</span>
+          <span class="tiny" style="font-weight:650">${m0(c.a)}</span></div>`).join('')}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:10px">
+      <div class="row"><span class="tiny muted grow">Pace vs. your ${m0(S.budget)} budget</span>
+      <span class="badge ${pct>85?'b-warn':'b-save'}">${pct}% used · day 7</span></div>
+      <div class="bar" style="margin-top:10px;height:8px"><i style="width:${pct}%;background:var(--grad)"></i></div>
+      <div class="tiny muted" style="margin-top:9px;line-height:1.6">You're tracking <b style="color:var(--warn)">$1,410 over</b> for August, driven by dining. The agent found 3 fixes worth <b style="color:var(--save)">$168/mo</b> → <span style="color:var(--save)">see Save</span>.</div>
+    </div>
+
+    ${agentsSection('spend')}
+
+    <div class="sec"><span class="lbl">Habits the agent noticed</span></div>
+    <div class="card">
+      ${[['🍜','DoorDash 14x this month','$412 · 62% ordered after 9pm','b-warn','Set a nightly cap'],
+         ['🔁','$409.97/mo in subscriptions','3 unused for 30+ days','b-dang','Audit now'],
+         ['💳','$2,140 on the wrong card','Sapphire 1x where Amex pays 4x','b-spend','Fix routing']]
+        .map(([e,t,s,b,a],i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+          <div class="mlogo">${e}</div>
+          <div class="grow"><div style="font-size:13px;font-weight:600">${t}</div>
+          <div class="tiny muted" style="margin-top:3px">${s}</div></div>
+          <span class="badge ${b}">${a}</span></div>`).join('')}
+    </div>
+
+    <div class="sec"><span class="lbl">12-month forecast</span><span class="act">Rebuilt nightly</span></div>
+    <div class="card">
+      ${forecastChart()}
+      <div class="row" style="margin-top:12px;gap:14px">
+        <span class="legend tiny" style="display:flex;gap:6px;align-items:center;color:var(--mut)"><i style="width:14px;height:2px;background:var(--dim);display:block"></i>Without Ledger</span>
+        <span class="legend tiny" style="display:flex;gap:6px;align-items:center;color:var(--mut)"><i style="width:14px;height:2px;background:var(--save);display:block"></i>With agent</span>
+      </div>
+      <div class="tiny muted" style="margin-top:11px;line-height:1.65;padding-top:11px;border-top:1px solid var(--line)">
+        Projected 12-month spend falls from <b style="color:var(--tx)">${m0(S.forecast.baseline.reduce((a,b)=>a+b,0))}</b> to <b style="color:var(--save)">${m0(S.forecast.withAgent.reduce((a,b)=>a+b,0))}</b> — <b style="color:var(--save)">${m0(S.forecast.baseline.reduce((a,b)=>a+b,0)-S.forecast.withAgent.reduce((a,b)=>a+b,0))} kept</b>, on the same basket. Front-loaded: 61% of the gain lands in months 1-4.
+      </div>
+    </div>
+
+    <div class="sec"><span class="lbl">Where the agent rationalizes</span><span class="act">By category</span></div>
+    <div class="card">
+      ${S.forecast.byCat.map((c,i)=>{
+        const cut = c.now - c.proj, pct = Math.round(cut/c.now*100);
+        return `<div class="li" ${i===0?'style="padding-top:0"':''}>
+          <div class="grow">
+            <div class="row"><span style="font-size:13px;font-weight:600" class="grow">${c.n}</span>
+            <span class="tiny muted">${m0(c.now)} → <b style="color:var(--save)">${m0(c.proj)}</b></span></div>
+            <div class="bar" style="margin-top:7px;position:relative">
+              <i style="width:${100-pct}%;background:var(--save)"></i>
+              <i style="width:${pct}%;background:var(--dim);position:absolute;top:0;left:${100-pct}%"></i>
+            </div>
+            <div class="row" style="margin-top:6px"><span class="tiny grow" style="color:var(--dim)">${c.how}</span>
+            <span class="badge ${c.conf>.8?'b-save':c.conf>.6?'b-warn':'b-dang'}">${Math.round(c.conf*100)}% conf</span></div>
+          </div></div>`;
+      }).join('')}
+      <div class="tiny muted" style="margin-top:12px;padding-top:11px;border-top:1px solid var(--line);line-height:1.6">
+        Low confidence isn't hidden. Travel and dining depend on <b style="color:var(--tx)">your</b> behavior changing, not just the agent's — so they're discounted.
+      </div>
+    </div>
+
+    <div class="sec"><span class="lbl">Recent</span><span class="act">All activity</span></div>
+    <div class="card">
+      ${(S.purchases.concat([
+        {e:'🍜',n:'DoorDash',s:'Dining · Amex Gold',a:38.44,d:'Today'},
+        {e:'🛒',n:'Whole Foods',s:'Groceries · Amex Gold',a:112.09,d:'Yesterday'},
+        {e:'🚗',n:'Uber',s:'Transport · Sapphire',a:24.80,d:'Aug 5', flag:'Duplicate charge disputed'},
+        {e:'🔁',n:'Adobe CC',s:'Subscription · Sapphire',a:59.99,d:'Aug 3'}
+      ])).map((t,i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+        <div class="mlogo">${t.e}</div>
+        <div class="grow"><div style="font-size:13px;font-weight:600">${t.n} ${t.agent?'<span class="badge b-save" style="margin-left:4px">BY AGENT</span>':''}</div>
+        <div class="tiny muted" style="margin-top:3px">${t.s}${t.flag?' · <span style="color:var(--warn)">'+t.flag+'</span>':''}</div></div>
+        <div style="text-align:right"><div style="font-size:13px;font-weight:650">-${money(t.a)}</div>
+        <div class="tiny muted" style="margin-top:3px">${t.d}</div></div></div>`).join('')}
+    </div>
+  </div>`;
+}
+
+/* ---------- SAVE ---------- */
+function viewSave(){
+  const yr = S.savings.reduce((a,s)=>a+s.a,0);
+  return `
+  <div style="padding-top:10px">
+    <h1>Save</h1>
+    <div class="tiny muted" style="margin-top:6px">Money the agent recovered — not money you skipped spending</div>
+
+    <div class="card" style="margin-top:18px;background:linear-gradient(150deg,color-mix(in srgb,var(--save) 8%,transparent),transparent 65%),var(--panel);border-color:color-mix(in srgb,var(--save) 18%,transparent)">
+      <div class="tiny muted">Recovered year to date</div>
+      <div style="font-size:38px;font-weight:750;letter-spacing:-1.6px;color:var(--save);margin-top:4px">${money(S.savedTotal)}</div>
+      <div class="row" style="margin-top:12px;gap:16px">
+        <div><div class="tiny muted">Run rate</div><div style="font-size:14px;font-weight:650;margin-top:2px">$1,840/yr</div></div>
+        <div><div class="tiny muted">Swept to savings</div><div style="font-size:14px;font-weight:650;margin-top:2px">$310.00</div></div>
+        <div><div class="tiny muted">Actions taken</div><div style="font-size:14px;font-weight:650;margin-top:2px">23</div></div>
+      </div>
+      <button class="btn grad" style="margin-top:14px" onclick="openSweep()">Sweep ${money(S.savedTotal-310)} to high-yield</button>
+    </div>
+
+    <div class="sec"><span class="lbl">Live opportunities</span><span class="act">$168/mo found</span></div>
+    ${S.subs.filter(s=>s.risk!=='ok').map(s=>`
+      <div class="card" style="margin-top:8px">
+        <div class="row">
+          <div class="mlogo">${s.e}</div>
+          <div class="grow"><div style="font-size:13.5px;font-weight:650">${s.n}</div>
+          <div class="tiny muted" style="margin-top:3px">${s.s}</div></div>
+          <div style="text-align:right"><div style="font-size:14px;font-weight:700;color:var(--save)">+${money(s.a)}</div>
+          <div class="tiny muted">per month</div></div>
+        </div>
+        <div class="row" style="margin-top:11px;gap:8px">
+          <button class="btn grad" onclick="quickSave('${s.n}',${s.a})">Let agent cancel</button>
+          <button class="btn ghost" style="width:auto;padding:13px 16px">Keep</button>
+        </div>
+      </div>`).join('')}
+
+    ${agentsSection('save')}
+
+    <div class="sec"><span class="lbl">Price watches</span><span class="act">Pre-authorized</span></div>
+    <div class="card">
+      ${S.watches.map((w,i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+        <div class="mlogo">${w.e}</div>
+        <div class="grow"><div style="font-size:13px;font-weight:600">${w.n}</div>
+        <div class="tiny muted" style="margin-top:3px">Now ${m0(w.now)} · buys at ${m0(w.target)}</div>
+        <div class="bar" style="width:120px"><i style="width:${w.prob}%;background:var(--save)"></i></div></div>
+        <div style="text-align:right"><div class="tiny" style="font-weight:650;color:var(--save)">${w.prob}%</div>
+        <div class="tiny muted" style="margin-top:2px">in 30d</div></div></div>`).join('')}
+    </div>
+
+    <div class="sec"><span class="lbl">Recovered ledger</span></div>
+    <div class="card">
+      ${S.savings.map((s,i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+        <div class="grow"><div style="font-size:13px;font-weight:600">${s.t}</div>
+        <div class="tiny muted" style="margin-top:3px">${s.m} · ${s.d}</div></div>
+        <div style="text-align:right"><div style="font-size:13px;font-weight:700;color:var(--save)">+${money(s.a)}</div>
+        <div class="badge b-save" style="margin-top:4px;display:inline-block">${s.tag}</div></div></div>`).join('')}
+    </div>
+  </div>`;
+}
+
+/* ---------- WALLET (multi-rail) ---------- */
+const RAIL = id => S.rails.find(r=>r.id===id) || S.rails[1];
+
+function railPick(amount, kind){
+  // deterministic rail-routing engine — mirrors server-side card.optimize + rail.select
+  if(kind==='digital_intl') return {id:'usdc', why:'Overseas digital vendor. USDC settles in ~2s at 0.02% vs 2.9% + 1.5% FX on card. <b>Saves $'+(amount*0.043).toFixed(2)+'</b>. Signed in your own wallet — we never hold it.'};
+  if(kind==='api')          return {id:'usdc', why:'Machine-to-machine metering. x402 streams sub-cent payments per call; no card rail supports this.'};
+  if(kind==='bill')         return {id:'ach',  why:'Recurring bill, no rewards offered, 1-3 day settle is fine. Zero fee. Initiated from your bank, straight to the biller.'};
+  if(amount>1500)           return {id:'csr',  why:'Above $1,500 — routing to a credit rail for full chargeback protection and purchase cover.'};
+  if(kind==='grocery'||kind==='dining') return {id:'amex', why:'4x on this MCC ≈ <b>$'+(amount*0.04).toFixed(2)+'</b> back, and chargeback rights are retained.'};
+  if(kind==='travel')       return {id:'csr',  why:'3x travel + trip-delay insurance. Beats debit by <b>$'+(amount*0.03).toFixed(2)+'</b>.'};
+  return {id:'amex', why:'Best net cost after rewards, with full dispute rights.'};
+}
+
+function viewSettings(){
+  return `<div style="padding-top:6px">
+    <button class="tiny muted" onclick="go('ask')" style="font-weight:600">← Back</button>
+    ${viewWallet()}
+    ${viewAgent()}
+  </div>`;
+}
+
+function viewWallet(){
+  const total = S.rails.filter(r=>r.bal!==null).reduce((a,r)=>a+r.bal,0);
+  const ab = S.agentBudget;
+  return `
+  <div style="padding-top:10px">
+    <h1>Pay</h1>
+    <div class="tiny muted" style="margin-top:6px">Your accounts, your money. Ledger routes — it never holds.</div>
+
+    <div class="card" style="margin-top:18px;background:linear-gradient(150deg,color-mix(in srgb,var(--save) 7%,transparent),color-mix(in srgb,var(--spend) 4%,transparent) 70%),var(--panel);border-color:color-mix(in srgb,var(--save) 18%,transparent)">
+      <div class="row" style="align-items:flex-start">
+        <div style="width:34px;height:34px;border-radius:11px;background:color-mix(in srgb,var(--save) 8%,transparent);display:grid;place-items:center;font-size:16px;flex:0 0 auto">🔒</div>
+        <div class="grow">
+          <div style="font-size:14px;font-weight:700">Ledger holds $0.00 of your money</div>
+          <div class="tiny muted" style="margin-top:5px;line-height:1.6">Funds move directly from your bank, card or wallet to the merchant. We hold no balance, take no custody, and never sit in the settlement path. We initiate — you own.</div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:13px;gap:8px">
+        <button class="btn ghost" onclick="openRailInfo()">How routing works</button>
+        <button class="btn ghost" onclick="openCustody()">Where the money sits</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:10px">
+      <div class="row"><span class="tiny muted grow">Visible across your linked accounts (read-only)</span></div>
+      <div style="font-size:26px;font-weight:750;letter-spacing:-1px;margin-top:5px">${money(total)}</div>
+      <div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap">
+        ${S.rails.filter(r=>r.bal!==null).map(r=>`<span class="badge" style="background:${r.c}1A;color:${r.c}">${r.e} ${m0(r.bal)}</span>`).join('')}
+      </div>
+      <div class="tiny" style="color:var(--dim);margin-top:10px">Balances are read via API. Ledger cannot move these funds except through a mandate you signed.</div>
+    </div>
+
+    <div class="sec"><span class="lbl">Connected instruments</span><span class="act">+ Add</span></div>
+    ${S.rails.map(r=>`
+      <div class="card" style="margin-top:8px;border-left:2.5px solid ${r.c}">
+        <div class="row">
+          <div class="mlogo" style="background:${r.c}12">${r.e}</div>
+          <div class="grow"><div style="font-size:13.5px;font-weight:650">${r.n}</div>
+          <div class="tiny muted" style="margin-top:3px">${r.s}</div></div>
+          <div style="text-align:right">${r.bal!==null?`<div style="font-size:14px;font-weight:700">${money(r.bal)}</div><div class="tiny" style="color:var(--dim);margin-top:2px">yours</div>`:'<div class="tiny muted">credit line</div>'}</div>
+        </div>
+        <div class="row" style="margin-top:11px;padding-top:10px;border-top:1px solid var(--line);gap:0">
+          <div class="grow"><div class="tiny" style="color:var(--dim)">Fee</div><div class="tiny" style="font-weight:650;margin-top:2px">${r.cost}</div></div>
+          <div class="grow"><div class="tiny" style="color:var(--dim)">Settles</div><div class="tiny" style="font-weight:650;margin-top:2px">${r.speed}</div></div>
+          <div class="grow" style="flex:1.5"><div class="tiny" style="color:var(--dim)">Protection</div><div class="tiny" style="font-weight:650;margin-top:2px">${r.prot}</div></div>
+        </div>
+        <div class="tiny" style="color:var(--dim);margin-top:10px;padding-top:9px;border-top:1px solid var(--line)">
+          Connected via <span style="color:var(--mut)">${r.via}</span> · <span style="color:var(--save)">initiate-only</span> · revoke anytime
+        </div>
+      </div>`).join('')}
+
+    <div class="sec"><span class="lbl">Agent's data costs</span><span class="act">On us</span></div>
+    <div class="card">
+      <div class="row"><span class="tiny muted grow">Price feeds, inventory and fare checks the agent bought this month</span>
+      <span class="badge b-spend">${money(ab.used)}</span></div>
+      <div class="bar" style="margin-top:10px;height:7px"><i style="width:${ab.used/ab.cap*100}%;background:var(--info)"></i></div>
+      <div class="tiny muted" style="margin-top:9px;line-height:1.6">Metered per-call over x402. <b style="color:var(--tx)">Ledger pays this, not you</b> — it comes out of your subscription, never your accounts. Hard-capped so the agent stops rather than overspend.</div>
+    </div>
+
+    <div class="sec"><span class="lbl">Later</span><span class="badge b-spend">PHASE 3</span></div>
+    <div class="card" style="border-style:dashed;opacity:.75">
+      <div style="font-size:13px;font-weight:650">A held balance — only if it earns its keep</div>
+      <div class="tiny muted" style="margin-top:8px;line-height:1.6">Custody means money-transmission licensing, a partner bank and a 6-month build. It buys speed and an interest spread — neither of which makes your savings bigger today. We'll do it when the margin justifies the compliance, not before.</div>
+    </div>
+    <div style="height:10px"></div>
+  </div>`;
+}
+
+/* ---------- AGENT (rules, presets, mandate, audit) ---------- */
+function viewAgent(){
+  const m = S.mandate;
+  return `
+  <div style="padding-top:10px">
+    <h1>Agent</h1>
+    <div class="tiny muted" style="margin-top:6px">What it learned, what it may do, what it did</div>
+
+    <div class="sec"><span class="lbl">Programmatic rules</span><span class="act" onclick="openNewRule()">+ New rule</span></div>
+    ${S.rules.map((r,i)=>`
+      <div class="card" style="margin-top:8px;${r.on?'':'opacity:.55'}">
+        <div class="row">
+          <div class="mlogo">${r.e}</div>
+          <div class="grow"><div style="font-size:13.5px;font-weight:650">${r.n}</div>
+          <div class="tiny muted" style="margin-top:3px">${r.runs} executions</div></div>
+          <div class="toggle ${r.on?'on':''}" onclick="toggleRule(${i})"><i></i></div>
+        </div>
+        <div class="guard" style="margin-top:11px">
+          <div class="row" style="margin-bottom:6px"><span style="width:52px;color:var(--dim)">WHEN</span><span class="grow" style="color:var(--tx)">${r.when}</span></div>
+          <div class="row" style="margin-bottom:6px"><span style="width:52px;color:var(--dim)">MAX</span><span class="grow" style="color:var(--tx)">${m0(r.cap)} per order · ${r.max}</span></div>
+          <div class="row" style="margin-bottom:6px"><span style="width:52px;color:var(--dim)">ONLY</span><span class="grow" style="color:var(--tx)">${r.merch}</span></div>
+          <div class="row"><span style="width:52px;color:var(--dim)">RAIL</span><span class="grow" style="color:var(--tx)">${r.rail==='auto'?'Auto-routed':RAIL(r.rail).n}</span></div>
+        </div>
+      </div>`).join('')}
+    <div class="card" style="margin-top:8px;border-style:dashed">
+      <div class="tiny muted" style="line-height:1.65">A rule can only fire inside your mandate. If a rule's cap exceeds the per-transaction limit, it escalates to you instead of executing. Rules are evaluated by a deterministic engine — <b style="color:var(--tx)">never by the model</b>.</div>
+    </div>
+
+    <div class="sec"><span class="lbl">Learned about you</span><span class="act">41 signals</span></div>
+    ${S.presets.map((p,i)=>`
+      <div class="card" style="margin-top:8px">
+        <div class="row">
+          <div class="grow"><div style="font-size:13px;font-weight:650">${p.t}</div>
+          <div class="tiny muted" style="margin-top:4px;line-height:1.55">${p.s}</div>
+          <div class="row" style="margin-top:8px;gap:7px">
+            <div class="bar" style="width:64px;margin:0"><i style="width:${p.conf*100}%;background:${p.conf>.8?'var(--save)':p.conf>.7?'var(--warn)':'var(--dim)'}"></i></div>
+            <span class="tiny" style="color:var(--dim)">${Math.round(p.conf*100)}% confidence</span>
+          </div></div>
+          <div class="toggle ${p.on?'on':''}" onclick="togglePreset(${i})"><i></i></div>
+        </div>
+      </div>`).join('')}
+    <div class="guard">Confidence rises as the agent watches your accepts, rejects and returns. Below 70% it will always ask first. You can turn any inference off and it stops using that signal.</div>
+
+    <div class="sec"><span class="lbl">Connected</span><span class="act">Add</span></div>
+    <div class="card">
+      ${S.connections.map((c,i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+        <div class="mlogo">${c.e}</div>
+        <div class="grow"><div style="font-size:13px;font-weight:600">${c.n}</div>
+        <div class="tiny muted" style="margin-top:3px">${c.s}</div></div>
+        <div class="toggle ${c.on?'on':''}" onclick="toggleConn(${i})"><i></i></div></div>`).join('')}
+    </div>
+
+    <div class="sec"><span class="lbl">Authorization</span><span class="act">Required, always</span></div>
+    <div class="card" style="border-color:var(--save)">
+      <div class="row" style="align-items:flex-start">
+        <div style="width:32px;height:32px;border-radius:8px;background:color-mix(in srgb,var(--save) 12%,transparent);display:grid;place-items:center;font-size:15px;flex:0 0 auto">☺</div>
+        <div class="grow"><div style="font-size:13.5px;font-weight:700">Nothing is bought without your face, fingerprint or passcode</div>
+        <div class="tiny muted" style="margin-top:5px;line-height:1.6">Your device holds a key that only unlocks with biometrics. It signs the exact cart — merchant, amount, item — not a yes/no. No signature, no payment. There is no override, not even by us.</div></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:8px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:4px">Two ways you authorize</div>
+      <div class="kv"><span class="k"><b style="color:var(--ink)">Live</b> · every ad-hoc buy</span><span class="v tiny" style="max-width:150px;text-align:right">Face ID at the moment of purchase</span></div>
+      <div class="kv"><span class="k"><b style="color:var(--ink)">Pre-authorized</b> · rules</span><span class="v tiny" style="max-width:150px;text-align:right">Face ID when you arm the rule, binding a narrow envelope</span></div>
+      <div class="tiny muted" style="margin-top:11px;line-height:1.6">A rule that buys while you sleep isn't unauthorized — you signed its exact ceiling, merchant list and expiry in advance. Anything outside that envelope stops and asks.</div>
+    </div>
+
+    <div class="sec"><span class="lbl">Spending mandate</span><span class="act">Edit</span></div>
+    <div class="card">
+      <div class="kv"><span class="k">Per transaction</span><span class="v">${m0(m.perTx)}</span></div>
+      <div class="kv"><span class="k">Daily ceiling</span><span class="v">${m0(m.daily)}</span></div>
+      <div class="kv"><span class="k">Monthly ceiling</span><span class="v">${m0(m.monthly)}</span></div>
+      <div class="kv"><span class="k">Pre-auth envelope</span><span class="v">up to ${m0(m.autoUnder)}</span></div>
+      <div class="kv"><span class="k">Allowed</span><span class="v tiny" style="max-width:180px;text-align:right">${m.categories}</span></div>
+      <div class="kv"><span class="k">Never</span><span class="v tiny" style="max-width:180px;text-align:right;color:var(--dang)">${m.blocked}</span></div>
+    </div>
+
+    <div class="sec"><span class="lbl">Always re-asks you when</span></div>
+    <div class="card">
+      ${[['Amount exceeds the signed envelope','Even by one cent'],
+         ['A merchant you\'ve never bought from','Trust score below 0.85'],
+         ['Sign-in from a new device','Old device keys are invalidated'],
+         ['You add or change a fingerprint / face','Key is destroyed by the OS, by design'],
+         ['14 days since you last authorized anything','Presence check'],
+         ['Blocked category, any amount','Hard deny — no prompt, just refused']]
+        .map(([t,s],i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+          <div class="grow"><div style="font-size:12.5px;font-weight:600">${t}</div>
+          <div class="tiny muted" style="margin-top:3px">${s}</div></div>
+          <span class="badge b-warn">Step-up</span></div>`).join('')}
+    </div>
+    <div class="guard">Mandates are signed by a hardware key inside your phone's secure element. The key is non-exportable and biometric-bound — if someone adds their face to your device, the operating system destroys it and every rule stops until you re-enroll. A merchant cannot charge outside a signed scope, and one tap revokes everything.</div>
+
+    <div class="sec"><span class="lbl">Audit log</span><span class="act">Export</span></div>
+    <div class="card">
+      ${[['Approved','Sony WH-1000XM6 · $278.00','You · biometric · Aug 7'],
+         ['Blocked','Gift card purchase $200','Policy: blocked category · Aug 6'],
+         ['Auto-executed','Dropbox cancellation','Under $75 auto rule · Aug 2'],
+         ['Blocked','Merchant trust 0.31','Unknown storefront · Jul 30']]
+        .map(([a,t,s],i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+          <div class="grow"><div style="font-size:13px;font-weight:600">${t}</div>
+          <div class="tiny muted" style="margin-top:3px">${s}</div></div>
+          <span class="badge ${a==='Blocked'?'b-dang':a==='Approved'?'b-save':'b-spend'}">${a}</span></div>`).join('')}
+    </div>
+    <div style="height:10px"></div>
+  </div>`;
+}
+
+/* =========================================================
+   SHEETS
+   ========================================================= */
+function openSheet(html){
+  document.getElementById('sheet').innerHTML = '<div class="grab"></div>'+html;
+  document.getElementById('sheet').classList.add('on');
+  document.getElementById('scrim').classList.add('on');
+}
+function closeSheet(){
+  document.getElementById('sheet').classList.remove('on');
+  document.getElementById('scrim').classList.remove('on');
+}
+
+function openApprove(i){
+  const it = S.results.items[i];
+  const isCancel = it.p === 0;
+  const kind = /flight|ANA|United|JAL/i.test(it.n+it.m) ? 'travel' : /Costco|Trader|Whole Foods|basket/i.test(it.n+it.m) ? 'grocery' : 'retail';
+  const pick = railPick(it.p, kind);
+  log('req','→ <b>rail.select</b>({amount:'+(it.p||0).toFixed(2)+', kind:"'+kind+'", rails:6})');
+  log('res','← rail=<b>'+pick.id+'</b> · net-cost winner · protection floor satisfied');
+  log('req','→ <b>mandate.create</b>({type:"cart", merchant:"'+it.m+'", max:'+(it.p||0).toFixed(2)+', rail:"'+pick.id+'", ttl:900})');
+  log('res','← mandate mnd_7c1e · unsigned · awaiting user presence');
+  openSheet(`
+    <div class="row" style="margin-bottom:14px">
+      <div class="avatar">L</div>
+      <div class="grow"><div style="font-size:15px;font-weight:700">Approve this ${isCancel?'action':'purchase'}</div>
+      <div class="tiny muted" style="margin-top:2px">One-time mandate · expires in 15:00</div></div>
+    </div>
+    <div class="kv"><span class="k">${isCancel?'Action':'Item'}</span><span class="v tiny" style="max-width:190px;text-align:right">${it.n}</span></div>
+    <div class="kv"><span class="k">Merchant</span><span class="v">${it.m}</span></div>
+    <div class="kv"><span class="k">${isCancel?'Monthly saving':'Amount'}</span><span class="v">${isCancel?'+'+money(it.was):money(it.p)}</span></div>
+    ${isCancel?'':`<div class="kv"><span class="k">Rail chosen</span><span class="v">${RAIL(pick.id).e} ${RAIL(pick.id).n}</span></div>
+    <div class="kv"><span class="k">Rewards back</span><span class="v ok">+$11.12</span></div>
+    <div class="kv"><span class="k">You save vs. list</span><span class="v ok">${money(it.was-it.p)}</span></div>
+    <div class="guard" style="border-color:color-mix(in srgb,var(--spend) 18%,transparent)">
+      <div style="color:var(--tx);font-weight:650;margin-bottom:6px">Why this rail</div>
+      <div style="line-height:1.6">${pick.why}</div>
+      <div class="row" style="margin-top:10px;gap:6px;flex-wrap:wrap">
+        ${S.rails.filter(r=>r.id!==pick.id&&r.id!=='vault').map(r=>`<span class="badge" style="background:${r.c}12;color:${r.c}">${r.e} ${r.id.toUpperCase()}</span>`).join('')}
+        <span class="tiny" style="color:var(--dim);width:100%;margin-top:4px">Alternatives evaluated and rejected on net cost or protection.</span>
+      </div>
+    </div>`}
+    <div class="guard">
+      <div class="row" style="margin-bottom:7px"><span class="ok">✓</span><span class="grow">Within per-transaction limit (${m0(S.mandate.perTx)})</span></div>
+      <div class="row" style="margin-bottom:7px"><span class="ok">✓</span><span class="grow">Merchant trust score 0.94 · 4 prior orders</span></div>
+      <div class="row" style="margin-bottom:7px"><span class="ok">✓</span><span class="grow">Single-use token · scoped to this cart only</span></div>
+      <div class="row"><span class="ok">✓</span><span class="grow">Returnable through Sep 6 · agent tracks the window</span></div>
+    </div>
+    <button class="btn grad" style="margin-top:16px" onclick="confirmBuy(${i})">Hold to approve · Face ID</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="denyBuy()">Not now</button>
+  `);
+}
+
+function confirmBuy(i){
+  const it = S.results.items[i];
+  // 1 · biometric gate — the OS unlocks a hardware key; nothing proceeds without it
+  log('sys','biometric prompt shown · LAPolicy=deviceOwnerAuthentication (Face ID, else passcode)');
+  openSheet(`
+    <div class="faceid">
+      <div class="fidbox">☺</div>
+      <div style="font-size:16px;font-weight:700">Confirm with Face ID</div>
+      <div class="tiny muted" style="margin-top:8px;line-height:1.6">Signing <b style="color:var(--ink)">${it.p===0?'this cancellation':money(it.p)+' at '+it.m}</b><br/>Your key never leaves this device.</div>
+      <div class="guard" style="text-align:left;margin-top:18px">Your face isn't sent anywhere. It unlocks a key held in the secure element, and that key signs this exact cart. We only ever see the signature.</div>
+    </div>`);
+  log('sys','user verified · secure enclave released key kid_a91f · biometric-bound, non-exportable');
+  log('req','→ <b>mandate.sign</b>({mnd_7c1e, alg:"ES256", payload_hash:"sha256:9c4e…"})');
+  log('res','← sig 3045022100… over {merchant, amount, item_hash, nonce, exp} — not a boolean');
+  log('req','→ <b>server.verify</b>({sig, kid_a91f, replay_nonce})');
+  log('res','← signature valid · device attested · <b>AP2 cart mandate</b> attached');
+  log('req','→ <b>psp.checkout</b>({token:"tkn_1x_9fa2", amount:'+(it.p||0).toFixed(2)+', mandate:mnd_7c1e})');
+  setTimeout(()=>{
+    log('res','← <b>AUTHORIZED</b> · auth_88c1 · network=visa_trusted_agent · 340ms');
+    log('res','← savings += $'+((it.was-it.p)||it.was).toFixed(2)+' · receipt stored · return window tracked');
+  }, 700);
+
+  const saved = it.p===0 ? it.was : (it.was - it.p);
+  S.savedTotal += saved;
+  if(it.p>0){
+    S.monthSpend += it.p; S.spentToday += it.p;
+    S.purchases.unshift({e:it.e,n:it.n.split(' ').slice(0,3).join(' '),s:'Bought by agent · Amex Gold',a:it.p,d:'Just now',agent:true});
+  } else {
+    S.subs = S.subs.filter(s=>s.risk==='ok');
+  }
+  S.savings.unshift({t: it.p===0?'Cancelled '+it.n:'Bought below 90-day median', m:it.m, a:saved, tag: it.p===0?'Subscription audit':'Price + coupon stack', d:'Today'});
+
+  setTimeout(()=>openSheet(`
+    <div style="text-align:center;padding:16px 6px 6px">
+      <div style="width:60px;height:60px;border-radius:50%;background:color-mix(in srgb,var(--save) 10%,transparent);display:grid;place-items:center;margin:0 auto 16px;font-size:26px">✓</div>
+      <div style="font-size:20px;font-weight:700;letter-spacing:-.5px">${it.p===0?'Cancelled':'Purchased'}</div>
+      <div class="tiny muted" style="margin-top:7px;line-height:1.6">${it.n}<br/>${it.p===0?'Confirmation emails saved to your vault':money(it.p)+' · arriving tomorrow'}</div>
+      <div class="card" style="margin-top:18px;text-align:left;border-color:color-mix(in srgb,var(--save) 18%,transparent);background:color-mix(in srgb,var(--save) 4%,transparent)">
+        <div class="row"><span class="tiny muted grow">Recovered on this order</span>
+        <span style="font-weight:700;color:var(--save)">+${money(saved)}</span></div>
+        <div class="row" style="margin-top:8px"><span class="tiny muted grow">Year to date</span>
+        <span style="font-weight:700;color:var(--save)">${money(S.savedTotal)}</span></div>
+      </div>
+      <button class="btn grad" style="margin-top:16px" onclick="closeSheet();S.tab='save';S.view='home';render()">See it in Save</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="closeSheet();S.view='home';S.tab='ask';render()">Done</button>
+    </div>`), 1250);
+}
+
+function denyBuy(){
+  log('err','← user declined · mandate mnd_7c1e revoked · no token issued');
+  closeSheet();
+}
+function watchIt(n,p){
+  S.watches.unshift({n:n, now:p, target:Math.round(p*0.86), prob:64, e:'👀'});
+  log('req','→ <b>watch.create</b>({sku, target:'+Math.round(p*0.86)+', auto_buy:true})');
+  log('res','← watch_4a9 armed · will auto-purchase under mandate when hit');
+  S.tab='save'; S.view='home'; render();
+}
+function quickSave(n,a){
+  log('req','→ <b>knot.subscription.cancel</b>({merchant:"'+n+'"})');
+  setTimeout(()=>log('res','← cancelled · effective next cycle · +$'+a.toFixed(2)+'/mo recovered'),600);
+  S.subs = S.subs.filter(s=>s.n!==n);
+  S.savedTotal += a*12;
+  S.savings.unshift({t:'Cancelled '+n, m:n, a:a*12, tag:'Subscription audit', d:'Today'});
+  render();
+}
+function openSweep(){
+  openSheet(`
+    <div style="font-size:17px;font-weight:700;margin-bottom:4px">Sweep recovered cash</div>
+    <div class="tiny muted" style="margin-bottom:14px">Savings only count once they leave checking.</div>
+    <div class="kv"><span class="k">Amount</span><span class="v">${money(S.savedTotal-310)}</span></div>
+    <div class="kv"><span class="k">From</span><span class="v">Chase checking ···1187</span></div>
+    <div class="kv"><span class="k">To</span><span class="v">Marcus HYSA ···5540 · 4.35%</span></div>
+    <div class="kv"><span class="k">Projected in 12mo</span><span class="v ok">${money((S.savedTotal-310)*1.0435)}</span></div>
+    <div class="guard">Both accounts are <b style="color:var(--tx)">yours</b> — this is a bank-to-bank transfer we initiate, not a deposit with us. You can also route to your brokerage or your highest-APR balance; the agent picks whichever nets more.</div>
+    <button class="btn grad" style="margin-top:16px" onclick="closeSheet()">Sweep now</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+function reauth(i){
+  const r=S.rules[i];
+  log('sys','biometric prompt shown · re-signing intent mandate for "'+r.n+'"');
+  log('res','← re-signed · envelope unchanged · expiry extended 90d');
+  r.signed='Today'; render();
+}
+function toggleRule(i){
+  S.rules[i].on = !S.rules[i].on;
+  const r = S.rules[i];
+  log(r.on?'req':'sys', (r.on?'→ <b>rule.arm</b>':'→ <b>rule.disarm</b>')+'({name:"'+r.n+'", cap:'+r.cap+', rail:"'+r.rail+'"})');
+  if(r.on) log('res','← armed · bound to mandate mnd_root · deterministic eval every 60s');
+  render();
+}
+function togglePreset(i){
+  S.presets[i].on = !S.presets[i].on;
+  log('sys','profile.preset '+(S.presets[i].on?'enabled':'disabled')+' · "'+S.presets[i].t+'" · model re-ranked');
+  render();
+}
+function openNewRule(){
+  openSheet(`
+    <div style="font-size:17px;font-weight:700">New programmatic rule</div>
+    <div class="tiny muted" style="margin:6px 0 14px">Strict parameters. The agent cannot exceed any of them.</div>
+    <div class="kv"><span class="k">Trigger</span><span class="v">Price below target</span></div>
+    <div class="kv"><span class="k">Item / query</span><span class="v">Dyson Airwrap i.d.</span></div>
+    <div class="kv"><span class="k">Hard price ceiling</span><span class="v">$479.00</span></div>
+    <div class="kv"><span class="k">Merchant allowlist</span><span class="v tiny" style="max-width:170px;text-align:right">Trust ≥ 0.85 only</span></div>
+    <div class="kv"><span class="k">Max executions</span><span class="v">1, then disarm</span></div>
+    <div class="kv"><span class="k">Rail</span><span class="v">Auto-route</span></div>
+    <div class="kv"><span class="k">Expires</span><span class="v">90 days</span></div>
+    <div class="guard">Arming this rule <b style="color:var(--ink)">is</b> the authorization. Your Face ID signs an envelope — this item, this ceiling, this merchant set, one execution, 90 days. The agent can act inside it without asking again; one cent outside it and everything stops. Raise the ceiling above your $500 per-transaction limit and every fire will prompt you live instead.</div>
+    <button class="btn grad" style="margin-top:16px" onclick="addRule()">Sign with Face ID to arm</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+function addRule(){
+  S.rules.unshift({n:'Dyson Airwrap auto-buy', when:'Price drops below $479', cap:479, rail:'auto', merch:'Trust ≥ 0.85', max:'1', on:true, signed:'Today', runs:0, e:'🌀'});
+  log('sys','biometric prompt shown · user verified · key kid_a91f released');
+  log('req','→ <b>mandate.sign</b>({type:"intent", ceiling:479, allowlist:"trust>=0.85", max_fires:1, exp:"90d"})');
+  log('res','← intent mandate mnd_5b2 signed on device · rule armed');
+  log('sys','execution inside this envelope needs no further prompt · outside it → step-up');
+  closeSheet(); render();
+}
+function openCustody(){
+  openSheet(`
+    <div style="font-size:17px;font-weight:700">Where the money sits</div>
+    <div class="tiny muted" style="margin:6px 0 14px">Short answer: never with us.</div>
+    <div class="kv"><span class="k">Card purchases</span><span class="v tiny" style="max-width:185px;text-align:right">Issuer → merchant. We pass a single-use token, nothing else.</span></div>
+    <div class="kv"><span class="k">Bank transfers</span><span class="v tiny" style="max-width:185px;text-align:right">Your bank → recipient, via Plaid Transfer. We never receive.</span></div>
+    <div class="kv"><span class="k">Stablecoin</span><span class="v tiny" style="max-width:185px;text-align:right">Your self-custody wallet. You hold the keys; you sign.</span></div>
+    <div class="kv"><span class="k">Savings sweep</span><span class="v tiny" style="max-width:185px;text-align:right">Your checking → <b>your own</b> HYSA. Both accounts are yours.</span></div>
+    <div class="kv"><span class="k">Ledger's balance</span><span class="v ok">$0.00, always</span></div>
+    <div class="guard">Because we never take custody, we're a payment <b style="color:var(--tx)">initiator</b>, not a transmitter. That means no held-funds licensing, no float, and nothing of yours at risk if we disappear tomorrow. Revoke every connection and your money is exactly where it already was.</div>
+    <button class="btn grad" style="margin-top:16px" onclick="closeSheet()">Got it</button>`);
+}
+function openRailInfo(){
+  openSheet(`
+    <div style="font-size:17px;font-weight:700">How rail routing works</div>
+    <div class="tiny muted" style="margin:6px 0 14px">Evaluated per transaction, deterministically.</div>
+    <div class="kv"><span class="k">1 · Protection floor</span><span class="v tiny" style="max-width:180px;text-align:right">Above $1,500 or low-trust merchant → credit rail, always</span></div>
+    <div class="kv"><span class="k">2 · Net cost</span><span class="v tiny" style="max-width:180px;text-align:right">Rewards minus fees minus FX, per MCC</span></div>
+    <div class="kv"><span class="k">3 · Settlement need</span><span class="v tiny" style="max-width:180px;text-align:right">Machine-to-machine or overseas digital → USDC / x402</span></div>
+    <div class="kv"><span class="k">4 · Cash position</span><span class="v tiny" style="max-width:180px;text-align:right">Never draw debit below your $2,000 floor</span></div>
+    <div class="kv"><span class="k">5 · Your overrides</span><span class="v tiny" style="max-width:180px;text-align:right">Rule-level rail pins win over all of the above</span></div>
+    <div class="guard">Stablecoin is used where it genuinely wins — sub-cent metering and cross-border digital goods. It is never used where you'd lose chargeback rights on a physical good. That asymmetry is the whole routing policy.</div>
+    <button class="btn grad" style="margin-top:16px" onclick="closeSheet()">Got it</button>`);
+}
+function toggleAgent(tab,i){
+  const a=S.agents[tab][i]; a.on=!a.on;
+  log(a.on?'req':'sys', (a.on?'→ <b>agent.start</b>':'→ <b>agent.stop</b>')+'({surface:"'+tab+'", name:"'+a.n+'"})');
+  if(a.on) log('res','← running · reads '+tab+' context · proposes only, cannot pay without your signature');
+  render();
+}
+function openNewAgent(tab){
+  openSheet(`
+    <div style="font-size:17px;font-weight:700">Build an agent</div>
+    <div class="tiny muted" style="margin:6px 0 14px">Runs on your <b style="color:var(--ink)">${tab}</b> surface. Same rules as the presets.</div>
+    <div class="kv"><span class="k">Name</span><span class="v">Kids' clothes restock</span></div>
+    <div class="kv"><span class="k">Watches for</span><span class="v tiny" style="max-width:170px;text-align:right">Seasonal size-up, every ~4 months</span></div>
+    <div class="kv"><span class="k">Learns from</span><span class="v tiny" style="max-width:170px;text-align:right">Your past orders at 6 merchants</span></div>
+    <div class="kv"><span class="k">May</span><span class="v tiny" style="max-width:170px;text-align:right">Find, compare, and propose a cart</span></div>
+    <div class="kv"><span class="k">May not</span><span class="v tiny" style="max-width:170px;text-align:right;color:var(--dang)">Pay without your Face ID</span></div>
+    <div class="kv"><span class="k">Ceiling</span><span class="v">$150 per order</span></div>
+    <div class="guard">Custom agents inherit your mandate exactly like presets do. They can research and recommend freely; to spend, they need either a live Face ID or a pre-signed envelope you arm yourself.</div>
+    <button class="btn grad" style="margin-top:16px" onclick="addAgent('${tab}')">Create agent</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`);
+}
+function addAgent(tab){
+  S.agents[tab].unshift({e:'🧵', n:"Kids' clothes restock", d:'Seasonal size-up across your 6 usual merchants, under $150', on:true, custom:true, rec:false});
+  log('req','→ <b>agent.create</b>({surface:"'+tab+'", ceiling:150, may:["search","compare","propose"], may_not:["pay_without_signature"]})');
+  log('res','← agent_c31 created · inherits mnd_root · recommend-only until you sign an envelope');
+  closeSheet(); render();
+}
+function openPlaidLink(){
+  openSheet(`
+    <div style="font-size:17px;font-weight:700">Connect your accounts</div>
+    <div class="tiny muted" style="margin:6px 0 14px">Read-only. Nothing can be charged from this.</div>
+    ${[['🏦','Chase','Checking + Sapphire Reserve'],['💳','American Express','Gold card'],['🔗','Merchant logins','Amazon, Uber, DoorDash +38 · via Knot']]
+      .map(([e,n,s],i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}><div class="mlogo">${e}</div>
+        <div class="grow"><div style="font-size:13px;font-weight:600">${n}</div>
+        <div class="tiny muted" style="margin-top:3px">${s}</div></div><span class="ok">✓</span></div>`).join('')}
+    <div class="guard">We read 18 months of history to learn how you buy. That history is what turns generic presets into agents that cite <i>your</i> behavior. You can revoke any connection in one tap and every agent stops.</div>
+    <button class="btn grad" style="margin-top:16px" onclick="finishLink()">Authorize read access</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeSheet()">Not now</button>`);
+}
+function finishLink(){
+  log('req','→ <b>plaid.link.exchange</b>({public_token})');
+  log('res','← 2 institutions · 3,411 transactions · 18 months');
+  log('req','→ <b>profile.derive</b>({transactions, window:"18mo"})');
+  setTimeout(()=>{
+    log('res','← 41 behavioural signals · 5 presets proposed across ask/spend/save');
+    log('sys','all proposed agents start OFF · user opts each one in');
+  },700);
+  S.linked = true;
+  openSheet(`
+    <div style="text-align:center;padding:14px 6px 4px">
+      <div style="width:56px;height:56px;border-radius:50%;background:color-mix(in srgb,var(--save) 10%,transparent);display:grid;place-items:center;margin:0 auto 14px;font-size:24px">✦</div>
+      <div style="font-size:19px;font-weight:700;font-family:var(--serif)">5 agents suggested for you</div>
+      <div class="tiny muted" style="margin-top:8px;line-height:1.6">Derived from 3,411 transactions across 18 months. Each one shows you what it saw before you switch it on.</div>
+      <div class="card" style="margin-top:16px;text-align:left">
+        <div class="kv"><span class="k">Ask</span><span class="v tiny">Price Patience, Restock Runner</span></div>
+        <div class="kv"><span class="k">Spend</span><span class="v tiny">Fee Catcher, Late-Night Guard</span></div>
+        <div class="kv"><span class="k">Save</span><span class="v tiny">Subscription Auditor, Card Router</span></div>
+      </div>
+      <button class="btn grad" style="margin-top:16px" onclick="closeSheet();S.tab='save';render()">Review them</button>
+    </div>`);
+  render();
+}
+function resetOnboarding(){
+  S.linked=false;
+  Object.keys(S.agents).forEach(t=>S.agents[t].forEach(a=>{ if(a.rec) a.on=false; }));
+  S.tab='ask'; S.view='home'; closeSheet(); clearLog(); render();
+}
+function toggleConn(i){
+  S.connections[i].on = !S.connections[i].on;
+  log(S.connections[i].on?'res':'err', (S.connections[i].on?'← connected · ':'← revoked · ') + S.connections[i].n);
+  render();
+}
+
+/* =========================================================
+   RENDER
+   ========================================================= */
+function render(){
+  const v = {ask:viewAsk, spend:viewSpend, save:viewSave, settings:viewSettings}[S.tab];
+  document.getElementById('body').innerHTML = v();
+  renderTabs();
+}
+applyTheme();
+render();
+</script>
+</body>
+</html>

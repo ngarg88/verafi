@@ -1,0 +1,13 @@
+VERAFI - START HERE   (build v4)
+==================================
+
+Check VERSION.txt says v4. If not, you opened an old zip.
+
+YOU DO NOT NEED TO RUN ANYTHING ON THIS COMPUTER.
+
+  1. Upload the zip file (verafi-app-v4.zip) to your GitHub repo:
+         https://github.com/ngarg88/verafi
+     Keep the filename exactly as it is.
+
+  2. Open SETUP-GUIDE.md and start at PART 4 (Tailscale).
+     Parts 1-3 are already done for you.

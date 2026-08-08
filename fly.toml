@@ -1,0 +1,23 @@
+app = "verafi"
+primary_region = "sjc"
+
+[build]
+
+[env]
+  PORT = "8080"
+  HOST = "0.0.0.0"
+  DATA_DIR = "/data"
+  AGENT_INTERVAL_HOURS = "24"
+
+# Your transactions live on this volume. It is not backed up by default —
+# `fly volumes snapshots` if you care, and you should.
+[mounts]
+  source = "verafi_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false      # the agent must be alive to run on schedule
+  auto_start_machines = true
+  min_machines_running = 1
