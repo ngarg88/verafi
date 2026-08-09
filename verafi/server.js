@@ -16,6 +16,8 @@ import { Store } from './store.js';
 import { Plaid, toCoreTx } from './plaid.js';
 import { importCsv, importOfx } from './importers.js';
 import { runAgents, AGENTS } from './agents.js';
+import { expensesOnly, breakdown, classify, FLOW } from './classify.js';
+import { RESEARCH, ask as askResearch } from './research.js';
 
 /**
  * Seed the full agent catalog so you can enable any of them, not just the ones your
@@ -223,7 +225,9 @@ const ROUTES = {
   'GET /api/spend': async (_b, q) => {
     const days = +(q.get('days') ?? 30);
     const since = Date.now() - days*86400000;
-    const tx = store.tx().filter(t => t.postedAt >= since && t.category !== 'transfer' && t.amountCents > 0);
+    const all = store.tx().filter(t => t.postedAt >= since);
+    const tx = expensesOnly(all).filter(t => t.amountCents > 0);
+    const flows = breakdown(all);
     const byCat = {}, byMerchant = {};
     for (const t of tx) {
       byCat[t.category] = (byCat[t.category] ?? 0) + t.amountCents;
@@ -232,13 +236,18 @@ const ROUTES = {
     const top = Object.entries(byMerchant).sort((a,b)=>b[1]-a[1]).slice(0,12);
     return { days, totalCents: tx.reduce((a,t)=>a+t.amountCents,0),
              byCategoryCents: byCat, topMerchants: top,
-             recent: tx.slice(0,40), signals: deriveSignals(store.tx()) };
+             recent: tx.slice(0,40), signals: deriveSignals(expensesOnly(store.tx())),
+             // shown in the UI so exclusions are visible, not silent
+             excluded: {
+               investmentCents: flows.cents.investment, transferCents: flows.cents.transfer,
+               debtPaymentCents: flows.cents.debt_payment, taxCents: flows.cents.tax,
+               incomeCents: flows.cents.income, counts: flows.counts } };
   },
 
   'GET /api/forecast': async () => {
-    const s = deriveSignals(store.tx());
+    const s = deriveSignals(expensesOnly(store.tx()));
     const since = Date.now() - 30*86400000;
-    const baseline = store.tx().filter(t => t.postedAt >= since && t.amountCents > 0 && t.category !== 'transfer')
+    const baseline = expensesOnly(store.tx()).filter(t => t.postedAt >= since && t.amountCents > 0)
       .reduce((a,t)=>a+t.amountCents,0);
     const dormant = s.dormantSubscriptions.reduce((a,r)=>a+r.amountCents,0);
     return { baselineMonthlyCents: baseline, signals: s, months: forecast({
@@ -251,29 +260,18 @@ const ROUTES = {
   },
 
   'GET /api/save': async () => {
-    const s = deriveSignals(store.tx());
-    const opportunities = [];
-    for (const d of s.dormantSubscriptions) opportunities.push({
-      kind:'cancel', merchant:d.merchantId, monthlyCents:d.amountCents, annualCents:d.amountCents*12,
-      evidence:`billing every ~${Math.round(d.cadenceDays)}d, last charge ${Math.round(d.daysSinceLast)} days ago and nothing since`,
-      confidence:0.91 });
-    if (s.avoidableFeesCents > 0) opportunities.push({
-      kind:'fees', merchant:'your bank', monthlyCents: Math.round(s.avoidableFeesCents/12), annualCents:s.avoidableFeesCents,
-      evidence:`$${(s.avoidableFeesCents/100).toFixed(2)} of fees found across your history`, confidence:0.86 });
-
-    const byCat = {};
-    for (const t of store.tx()) if (t.amountCents>0) byCat[t.category] = (byCat[t.category] ?? 0) + t.amountCents;
-    for (const [cat, cents] of Object.entries(byCat)) {
-      const best = bestCardFor(cat);
-      if (best && best.mult > 1 && cents > 20000) opportunities.push({
-        kind:'card_routing', merchant:cat, monthlyCents: Math.round(cents*(best.mult-1)/100/18),
-        annualCents: Math.round(cents*(best.mult-1)/100*(12/18)),
-        evidence:`${best.name} earns ${best.mult}x on ${cat}; you spent $${(cents/100).toFixed(0)} there`, confidence:0.8 });
-    }
-    opportunities.sort((a,b)=>b.annualCents-a.annualCents);
-    return { verifiedTotalCents: verifiedTotalCents(D.savings), events: D.savings,
-             opportunities: opportunities.slice(0,12),
-             totalAnnualOpportunityCents: opportunities.reduce((a,o)=>a+o.annualCents,0) };
+    // Opportunities come straight from the agents, so every line has a title AND an
+    // explanation. A number with no detail is not something you can act on.
+    const { all, recurringAnnualCents, oneOffCents } = runAgents({ store, cardRules: CARD_RULES });
+    return {
+      verifiedTotalCents: verifiedTotalCents(D.savings),
+      events: D.savings,
+      opportunities: all,
+      recurringAnnualCents, oneOffCents,
+      totalAnnualOpportunityCents: recurringAnnualCents,
+      agentsEnabled: D.agents.filter(a => a.enabled).length,
+      agentsAvailable: D.agents.length
+    };
   },
 
   'POST /api/save/claim': async (b) => {
@@ -373,6 +371,19 @@ const ROUTES = {
   'POST /api/findings/dismiss': async (b) => {
     D.findings = (D.findings ?? []).filter(f => `${f.agent}:${f.ref}` !== b.key);
     store.save(); return { ok:true };
+  },
+
+  /** Research agents. capability = recommend. Nothing here can spend money. */
+  'GET /api/research': async () => ({
+    presets: Object.entries(RESEARCH).map(([k, r]) => ({ key:k, label:r.label, hint:r.hint, icon:r.icon }))
+  }),
+  'POST /api/ask': async (b) => {
+    const run = store.startRun(b.query || b.preset || 'research');
+    const out = askResearch({ query: b.query, preset: b.preset, tx: store.tx(),
+                              instruments: D.instruments, cardRules: CARD_RULES });
+    store.step(run, 'research.' + out.agent, { query: b.query }, { evidence: out.evidence.length });
+    store.finishRun(run);
+    return out;
   },
 
   'POST /api/reset': async () => { store.reset(); return { reset:true }; },

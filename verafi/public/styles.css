@@ -46,7 +46,7 @@ h1{font:500 27px/1.15 var(--serif);letter-spacing:-.5px}
 .tog.on{background:var(--save)} .tog.on i{left:18px;background:#fff}
 .tabs{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--line);
   display:flex;padding-bottom:env(safe-area-inset-bottom);z-index:20}
-.tabs button{flex:1;padding:13px 0 12px;font-size:10.5px;font-weight:600;color:var(--dim);display:flex;flex-direction:column;align-items:center;gap:3px}
+.tabs button{flex:1;min-width:0;padding:13px 0 12px;font-size:9.5px;font-weight:600;color:var(--dim);display:flex;flex-direction:column;align-items:center;gap:3px}
 .tabs button.on{color:var(--ink)}
 .tabs svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .empty{text-align:center;padding:34px 16px;color:var(--mut)}
