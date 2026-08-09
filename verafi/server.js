@@ -18,6 +18,7 @@ import { importCsv, importOfx } from './importers.js';
 import { runAgents, AGENTS } from './agents.js';
 import { expensesOnly, breakdown, classify, FLOW } from './classify.js';
 import { RESEARCH, ask as askResearch } from './research.js';
+import { isDealQuery, researchDeal, spendingContext, COST } from './deals.js';
 
 /**
  * Seed the full agent catalog so you can enable any of them, not just the ones your
@@ -91,7 +92,9 @@ async function scanStatements() {
   try { files = await readdir(WATCH_DIR); } catch { return 0; }
   let added = 0;
   for (const f of files) {
-    if (!/\.(csv|ofx|qfx)$/i.test(f) || /^readme/i.test(f)) continue;
+    // NEVER auto-import demo data. Shipping a sample file that the watcher picks up
+    // means a redeploy silently injects fake transactions into someone's real finances.
+    if (!/\.(csv|ofx|qfx)$/i.test(f) || /^readme/i.test(f) || /^sample[-_]/i.test(f)) continue;
     let text;
     try { text = await readFile(join(WATCH_DIR, f), 'utf8'); } catch { continue; }
     const isOfx = /<OFX>|<STMTTRN>/i.test(text) || /\.(ofx|qfx)$/i.test(f);
@@ -379,11 +382,42 @@ const ROUTES = {
   }),
   'POST /api/ask': async (b) => {
     const run = store.startRun(b.query || b.preset || 'research');
+    // "find me a deal" needs the outside world; "what am I overpaying for" needs your data.
+    // Route on intent rather than making the user pick.
+    if (!b.preset && isDealQuery(b.query)) {
+      const month = new Date().toISOString().slice(0,7);
+      D.meter ??= {}; D.meter[month] ??= { monthUsd: 0, queries: 0, cache: {} };
+      const out = await researchDeal({ query: b.query, tx: store.tx(),
+                                       apiKey: process.env.ANTHROPIC_API_KEY,
+                                       meter: D.meter[month] });
+      store.save();
+      store.step(run, 'research.deal', { query: b.query }, { ok: out.ok, sources: (out.sources||[]).length });
+      store.finishRun(run, out.ok ? 'completed' : 'blocked');
+      return { agent:'deal', label:'Deal research', icon:'🔎', kind:'deal',
+               steps:[{tool:'context.load',detail:out.context.summary},
+                      {tool:'web.search',detail: out.ok ? `${(out.sources||[]).length} sources` : 'unavailable'}],
+               answer: out.answer, evidence: (out.sources||[]).map(s=>`${s.title||s.url} — ${s.url}`),
+               howToFix: out.howToFix, ok: out.ok, cached: out.cached, capped: out.capped,
+               costUsd: out.costUsd,
+               meter: { spentUsd: D.meter[month].monthUsd, queries: D.meter[month].queries,
+                        capUsd: COST.monthlyCapUsd },
+               disclaimer:'Research only — this agent cannot book or pay for anything.' };
+    }
     const out = askResearch({ query: b.query, preset: b.preset, tx: store.tx(),
                               instruments: D.instruments, cardRules: CARD_RULES });
     store.step(run, 'research.' + out.agent, { query: b.query }, { evidence: out.evidence.length });
     store.finishRun(run);
     return out;
+  },
+
+  /** Wipe any demo rows that a redeploy may have injected, without touching real data. */
+  'POST /api/purge-demo': async () => {
+    const DEMO = /equinox sf union|dropbox\*plus|payroll direct dep|rent - property mgmt|blue bottle|onyx/i;
+    const before = D.transactions.length;
+    D.transactions = D.transactions.filter(t => !/^(s\.csv|sample)/i.test(t.source ?? '') && !DEMO.test(t.merchantName ?? ''));
+    D.findings = []; D.seenFindings = {};
+    store.save();
+    return { removed: before - D.transactions.length, remaining: D.transactions.length };
   },
 
   'POST /api/reset': async () => { store.reset(); return { reset:true }; },

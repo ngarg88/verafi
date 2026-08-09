@@ -167,9 +167,13 @@ function viewAsk() {
   <div class="tiny muted">Research agents. They read your history and answer — they cannot spend.</div>
 
   <div class="card">
-    <input id="q" placeholder="should i buy airpods" style="border:0;padding:4px 0;font-size:15px"
-           onkeydown="if(event.key==='Enter')doAsk()"/>
-    <button class="btn go" onclick="doAsk()">${S.busy?'Thinking…':'Ask'}</button>
+    <input id="q" placeholder="all-inclusive to the Bahamas, Labor Day, 2 adults 2 kids"
+           style="border:0;padding:4px 0;font-size:15px" onkeydown="if(event.key==='Enter')doAsk()"/>
+    <button class="btn go" onclick="doAsk()">${S.busy?'Researching…':'Ask'}</button>
+    <div class="tiny" style="color:var(--dim);margin-top:9px;line-height:1.5">
+      Questions about <b style="color:var(--mut)">your money</b> are answered from your history.
+      Questions about <b style="color:var(--mut)">what to buy</b> search the web.
+    </div>
   </div>
 
   <div class="sec"><span class="lbl">Or pick one</span></div>
@@ -186,7 +190,10 @@ function viewAsk() {
   ${r ? `
     <div class="sec"><span class="lbl">${esc(r.label)}</span><span class="act">${r.latencyMs}ms</span></div>
     <div class="card">
-      <div style="font-size:14px;line-height:1.65">${md(r.answer)}</div>
+      <div style="font-size:14px;line-height:1.65;white-space:pre-wrap">${md(r.answer)}</div>
+      ${r.howToFix ? `<div class="guard" style="margin-top:12px">
+        <div style="color:var(--ink);font-weight:650;margin-bottom:6px">To switch this on</div>
+        ${r.howToFix.map(h=>`<div style="line-height:1.7">· ${esc(h)}</div>`).join('')}</div>`:''}
       ${r.evidence.length ? `<div style="margin-top:12px;padding-top:11px;border-top:1px solid var(--line)">
         <div class="tiny" style="color:var(--dim);font-weight:700;letter-spacing:.6px;margin-bottom:7px">WHAT I LOOKED AT</div>
         ${r.evidence.map(e=>`<div class="tiny muted" style="line-height:1.7">· ${md(e)}</div>`).join('')}
