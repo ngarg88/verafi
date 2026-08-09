@@ -17,6 +17,7 @@ import { Plaid, toCoreTx } from './plaid.js';
 import { importCsv, importOfx } from './importers.js';
 import { runAgents, AGENTS } from './agents.js';
 import { expensesOnly, breakdown, classify, FLOW } from './classify.js';
+import { categoriseAll, categorise, TAXONOMY } from './categories.js';
 import { RESEARCH, ask as askResearch } from './research.js';
 import { isDealQuery, researchDeal, spendingContext, COST } from './deals.js';
 
@@ -231,13 +232,16 @@ const ROUTES = {
     const all = store.tx().filter(t => t.postedAt >= since);
     const tx = expensesOnly(all).filter(t => t.amountCents > 0);
     const flows = breakdown(all);
-    const byCat = {}, byMerchant = {};
-    for (const t of tx) {
-      byCat[t.category] = (byCat[t.category] ?? 0) + t.amountCents;
-      byMerchant[t.merchantName ?? t.merchantId] = (byMerchant[t.merchantName ?? t.merchantId] ?? 0) + t.amountCents;
-    }
+    // Full taxonomy with subcategories and per-merchant rollups, so the UI can drill in.
+    const categories = categoriseAll(tx);
+    const byCat = Object.fromEntries(categories.map(c => [c.key, c.cents]));
+    const byMerchant = {};
+    for (const t of tx) byMerchant[t.merchantName ?? t.merchantId] = (byMerchant[t.merchantName ?? t.merchantId] ?? 0) + t.amountCents;
     const top = Object.entries(byMerchant).sort((a,b)=>b[1]-a[1]).slice(0,12);
+    const uncat = categories.find(c => c.key === 'other');
     return { days, totalCents: tx.reduce((a,t)=>a+t.amountCents,0),
+             categories,
+             uncategorisedShare: uncat ? uncat.share : 0,
              byCategoryCents: byCat, topMerchants: top,
              recent: tx.slice(0,40), signals: deriveSignals(expensesOnly(store.tx())),
              // shown in the UI so exclusions are visible, not silent

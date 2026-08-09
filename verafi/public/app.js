@@ -10,7 +10,7 @@ const $m0 = (c) => (c/100).toLocaleString('en-US',{style:'currency',currency:'US
 const esc = (s) => String(s ?? '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 const title = (s) => String(s ?? '').replace(/[-_]/g,' ').replace(/\b\w/g, m => m.toUpperCase());
 
-const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, spend:null, save:null, forecast:null, busy:false, error:null };
+const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, spend:null, save:null, forecast:null, busy:false, error:null };
 
 const ICONS = {
   ask:'<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
@@ -219,42 +219,80 @@ async function doAsk(preset) {
 
 /* ---------------------------------------------------------------- spend */
 function viewSpend() {
-  const sp = S.spend, fc = S.forecast;
-  const cats = Object.entries(sp?.byCategoryCents ?? {}).sort((a,b)=>b[1]-a[1]);
-  const max = cats[0]?.[1] ?? 1;
+  const sp = S.spend, fc = S.forecast, cats = sp?.categories ?? [];
+  const open = S.openCat;
+
+  if (open) {
+    const c = cats.find(x => x.key === open);
+    if (!c) { S.openCat = null; return viewSpend(); }
+    return `
+    <div class="top"><button class="chipbtn" onclick="S.openCat=null;render()">← Spend</button>
+      <span class="sp"></span></div>
+    <div class="card">
+      <div class="row"><div class="dot">${c.icon}</div>
+        <div class="grow"><div style="font-weight:650;font-size:15px">${esc(c.label)}</div>
+        <div class="tiny muted" style="margin-top:3px">${c.count} transactions · ${c.share}% of spending</div></div>
+        <div class="big" style="font-size:22px">${$m0(c.cents)}</div></div>
+    </div>
+
+    <div class="sec"><span class="lbl">Breakdown</span></div>
+    <div class="card">
+      ${c.subs.map((sb,i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+        <div class="grow"><div class="row"><span style="font-size:13px;font-weight:600" class="grow">${title(sb.key)}</span>
+          <span class="tiny muted">${$m0(sb.cents)}</span></div>
+          <div class="bar"><i style="width:${sb.cents/c.cents*100}%"></i></div>
+          <div class="tiny" style="color:var(--dim);margin-top:4px">${sb.count} transactions</div></div></div>`).join('')}
+    </div>
+
+    <div class="sec"><span class="lbl">Where it went</span><span class="act">${c.merchants.length} merchants</span></div>
+    <div class="card">
+      ${c.merchants.map((m,i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+        <div class="dot">${esc((m.name||'?').trim()[0] ?? '?').toUpperCase()}</div>
+        <div class="grow"><div style="font-size:13px;font-weight:600">${esc(m.name)}</div>
+        <div class="tiny muted" style="margin-top:2px">${title(m.sub)} · ${m.count}×</div></div>
+        <div style="font-weight:650">${$m0(m.cents)}</div></div>`).join('')}
+    </div>`;
+  }
+
+  const max = cats[0]?.cents ?? 1;
   return `
   <div class="top"><h1>Spend</h1><span class="sp"></span>
     <button class="chipbtn" onclick="refresh()">${S.busy?'<span class="spin"></span>':'↻'}</button></div>
   <div class="tiny muted">Last 30 days · ${sp?.recent.length ?? 0} transactions</div>
 
-  <div class="card"><div class="tiny muted">Total out</div>
-    <div class="big" style="margin-top:4px">${$m0(sp?.totalCents ?? 0)}</div></div>
+  <div class="card"><div class="tiny muted">Total spent</div>
+    <div class="big" style="margin-top:4px">${$m0(sp?.totalCents ?? 0)}</div>
+    <div class="tiny muted" style="margin-top:6px">Investments, card payments, taxes and transfers excluded — see Pay</div></div>
 
-  <div class="sec"><span class="lbl">By category</span></div>
-  <div class="card">
-    ${cats.map(([c,v],i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
-      <div class="grow"><div class="row"><span style="font-size:13.5px;font-weight:600" class="grow">${title(c)}</span>
-        <span class="tiny muted">${$m0(v)}</span></div>
-        <div class="bar"><i style="width:${v/max*100}%"></i></div></div></div>`).join('') || '<div class="tiny muted">No data yet</div>'}
-  </div>
+  <div class="sec"><span class="lbl">Categories</span><span class="act">tap to open</span></div>
+  ${cats.map(c=>`
+    <div class="card" onclick="S.openCat='${c.key}';render();scrollTo(0,0)" style="cursor:pointer">
+      <div class="row">
+        <div class="dot">${c.icon}</div>
+        <div class="grow">
+          <div class="row"><span style="font-size:13.5px;font-weight:650" class="grow">${esc(c.label)}</span>
+            <span style="font-weight:650">${$m0(c.cents)}</span></div>
+          <div class="bar" style="margin-top:7px"><i style="width:${c.cents/max*100}%"></i></div>
+          <div class="row" style="margin-top:5px">
+            <span class="tiny grow" style="color:var(--dim)">${c.subs.slice(0,3).map(s=>title(s.key)).join(' · ')}</span>
+            <span class="tiny muted">${c.share}%</span></div>
+        </div>
+        <span class="muted" style="margin-left:2px">›</span>
+      </div>
+    </div>`).join('') || '<div class="card"><div class="tiny muted">No spending in this period.</div></div>'}
 
-  ${fc ? `<div class="sec"><span class="lbl">12-month forecast</span><span class="act">With bands</span></div>
+  ${sp?.uncategorisedShare > 8 ? `<div class="card" style="border-color:var(--warn)">
+    <div class="tiny" style="line-height:1.6"><b style="color:var(--ink)">${sp.uncategorisedShare}% is uncategorised.</b>
+    That's higher than it should be — tap Uncategorised above and tell me what those merchants are, and I'll add rules for them.</div></div>` : ''}
+
+  ${fc ? `<div class="sec"><span class="lbl">12-month forecast</span><span class="act">with bands</span></div>
   <div class="card">
     ${sparkline(fc.months)}
     <div class="tiny muted" style="margin-top:11px;padding-top:11px;border-top:1px solid var(--line);line-height:1.6">
-      If you act on what's in Save, monthly spend trends from <b>${$m0(fc.months[0].projectedCents)}</b> to
-      <b class="ok">${$m0(fc.months[11].projectedCents)}</b>. Shaded band is the honest uncertainty —
-      the wide part is the bit that needs <i>you</i> to change, not just the app.
+      Acting on what's in Save trends monthly spend from <b style="color:var(--ink)">${$m0(fc.months[0].projectedCents)}</b>
+      to <b class="ok">${$m0(fc.months[11].projectedCents)}</b>. The shaded band is real uncertainty — the wide part needs <i>you</i> to change, not just the app.
     </div>
   </div>` : ''}
-
-  <div class="sec"><span class="lbl">Top merchants</span></div>
-  <div class="card">
-    ${(sp?.topMerchants ?? []).map(([n,v],i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
-      <div class="dot">${esc(String(n).trim()[0] ?? '?').toUpperCase()}</div>
-      <div class="grow" style="font-size:13px;font-weight:600">${esc(n)}</div>
-      <div style="font-size:13px;font-weight:650">${$m0(v)}</div></div>`).join('')}
-  </div>
 
   <div class="sec"><span class="lbl">Recent</span></div>
   <div class="card">
