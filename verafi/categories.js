@@ -153,8 +153,42 @@ const RULES = [
   [/dry ?clean|laundr|tailor|cobbler|alteration/i,'services','cleaning'],
   [/home ?depot|lowes|ace ?hardware|sherwin|menards|tractor ?supply/i,'shopping','home'],
   [/\bacme\b|shoprite|stop ?& ?shop|food ?town|key ?food|c-?town|foodtown|grocery|market\b/i,'grocery','supermarket'],
-  [/nail|lash|brow|spa\b|massage envy|great ?clips|supercuts/i,'personal','salon']
+  [/nail|lash|brow|spa\b|massage envy|great ?clips|supercuts/i,'personal','salon'],
+  [/snap ?fitness|anytime ?fitness|blink ?fitness|retro ?fitness|\bgf\*/i,'fitness','gym'],
+  [/soccer|baseball|basketball|gymnast|swim ?(school|lesson)|karate|dance ?(studio|academy)|academy|little ?gym|tutor/i,'kids','activities'],
+  [/google ?store|microsoft ?store|samsung/i,'shopping','electronics'],
+  [/jpmorgan|chase bank|bank of america|wells ?fargo|citibank|pnc bank|td bank|us bank/i,'services','professional']
 ];
+
+/**
+ * USER-TAUGHT RULES
+ *
+ * No fixed rule list survives the long tail of real merchants. When you tell the app what
+ * something is, it remembers — and your answer always beats ours.
+ */
+export function applyLearned(name, learned) {
+  if (!learned) return null;
+  const n = String(name ?? '').toLowerCase();
+  for (const [pattern, v] of Object.entries(learned)) {
+    if (n.includes(pattern)) return { category: v.category, subcategory: v.subcategory ?? 'unknown',
+                                      confidence: 1, matched: 'you taught me this' };
+  }
+  return null;
+}
+
+/** Biggest unknown merchants first — the ones worth asking about. */
+export function unknownMerchants(txs, limit = 12) {
+  const by = {};
+  for (const t of txs) {
+    if (t.amountCents <= 0) continue;
+    const c = categorise(t.merchantName ?? t.merchantId, t.category);
+    if (c.category !== 'other') continue;
+    const k = t.merchantName ?? t.merchantId;
+    (by[k] ??= { name:k, cents:0, count:0 });
+    by[k].cents += t.amountCents; by[k].count++;
+  }
+  return Object.values(by).sort((a,b)=>b.cents-a.cents).slice(0, limit);
+}
 
 /** Returns { category, subcategory, confidence, matched }. */
 export function categorise(description, plaidCategory) {
@@ -176,7 +210,7 @@ export function categorise(description, plaidCategory) {
 }
 
 /** Everything Spend needs to render a drill-down, in one pass. */
-export function categoriseAll(txs) {
+export function categoriseAll(txs, learned = null) {
   const cats = {};
   for (const t of txs) {
     if (t.amountCents <= 0) continue;
@@ -184,7 +218,8 @@ export function categoriseAll(txs) {
     // importer guessed. The old category is only a fallback when nothing matches.
     // Order matters: our specific rules first, then whatever the aggregator said,
     // and only then "other". Dumping straight to "other" is what made this useless.
-    let c = categorise(t.merchantName ?? t.merchantId, t.category);
+    let c = applyLearned(t.merchantName ?? t.merchantId, learned)
+         ?? categorise(t.merchantName ?? t.merchantId, t.category);
     if (c.category === 'other' && t.category && TAXONOMY[t.category] && t.category !== 'other')
       c = { category: t.category, subcategory: 'unknown', confidence: 0.5 };
     if (c.category === 'other' && t.plaidCategory) {

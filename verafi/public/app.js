@@ -10,7 +10,7 @@ const $m0 = (c) => (c/100).toLocaleString('en-US',{style:'currency',currency:'US
 const esc = (s) => String(s ?? '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 const title = (s) => String(s ?? '').replace(/[-_]/g,' ').replace(/\b\w/g, m => m.toUpperCase());
 
-const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, lastQuery:null, spend:null, save:null, forecast:null, busy:false, error:null };
+const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, unknowns:null, taxonomy:null, lastQuery:null, spend:null, save:null, forecast:null, busy:false, error:null };
 
 const ICONS = {
   ask:'<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
@@ -26,11 +26,11 @@ async function load() {
   if (S.state.linked) {
     // One missing endpoint must never blank the whole app. Each call fails on its own.
     const safe = (p) => api(p).catch(e => ({ __failed: p, __error: e.message }));
-    const [sp, sv, fc, cd, rs, dc, wl, hu] = await Promise.all([
+    const [sp, sv, fc, cd, rs, dc, wl, hu, un] = await Promise.all([
       safe('/api/spend?days=30'), safe('/api/save'), safe('/api/forecast'),
-      safe('/api/cards'), safe('/api/research'), safe('/api/deals/presets'), safe('/api/deals/watchlist'), safe('/api/hunts')
+      safe('/api/cards'), safe('/api/research'), safe('/api/deals/presets'), safe('/api/deals/watchlist'), safe('/api/hunts'), safe('/api/unknowns')
     ]);
-    const failed = [sp,sv,fc,cd,rs,dc,wl,hu].filter(x => x?.__failed).map(x => x.__failed);
+    const failed = [sp,sv,fc,cd,rs,dc,wl,hu,un].filter(x => x?.__failed).map(x => x.__failed);
     Object.assign(S, {
       spend: sp.__failed ? null : sp, save: sv.__failed ? null : sv,
       forecast: fc.__failed ? null : fc, cards: cd.__failed ? null : cd,
@@ -38,6 +38,8 @@ async function load() {
       dealCats: dc?.__failed ? [] : dc.categories,
       watchlist: wl?.__failed ? [] : wl.items,
       hunts: hu?.__failed ? [] : hu.hunts,
+      unknowns: un?.__failed ? [] : un.unknowns,
+      taxonomy: un?.__failed ? [] : un.taxonomy,
       staleServer: failed.length ? failed : null
     });
   }
@@ -253,15 +255,13 @@ async function approveDeal(id) {
 }
 
 /* ---------------------------------------------------------------- spend */
-function viewSpend() {
-  const sp = S.spend, fc = S.forecast, cats = sp?.categories ?? [];
-  const open = S.openCat;
-
-  if (open) {
+function viewCategoryDetail(open) {
+  const sp = S.spend, cats = sp?.categories ?? [];
+  {
     const c = cats.find(x => x.key === open);
-    if (!c) { S.openCat = null; return viewSpend(); }
+    if (!c) { S.openCat = null; return viewSave(); }
     return `
-    <div class="top"><button class="chipbtn" onclick="S.openCat=null;render()">← Spend</button>
+    <div class="top"><button class="chipbtn" onclick="S.openCat=null;render()">← Save</button>
       <span class="sp"></span></div>
     <div class="card">
       <div class="row"><div class="dot">${c.icon}</div>
@@ -288,8 +288,10 @@ function viewSpend() {
         <div style="font-weight:650">${$m0(m.cents)}</div></div>`).join('')}
     </div>`;
   }
+}
 
-  const max = cats[0]?.cents ?? 1;
+function viewSpend() {
+  const sp = S.spend;
   return `
   <div class="top"><h1>Spend</h1><span class="sp"></span>
     <button class="chipbtn" onclick="refresh()">${S.busy?'<span class="spin"></span>':'↻'}</button></div>
@@ -314,40 +316,10 @@ function viewSpend() {
   <div class="tiny" style="color:var(--dim);margin-top:8px;line-height:1.5">Approving opens the merchant's own checkout — Apple Pay works there and your card never passes through Verafi.</div>
   ` : `<div class="card"><div class="tiny muted">Nothing queued. Find something in <b style="color:var(--ink)">Shop</b> and hold it — it lands here for review.</div></div>`}
 
-  <div class="sec"><span class="lbl">What you actually spend</span><span class="act">last 30 days</span></div>
-  <div class="card"><div class="tiny muted">Total spent</div>
-    <div class="big" style="margin-top:4px">${$m0(sp?.totalCents ?? 0)}</div>
-    <div class="tiny muted" style="margin-top:6px">Investments, card payments, taxes and transfers excluded — see Pay</div></div>
-
-  <div class="sec"><span class="lbl">Categories</span><span class="act">tap to open</span></div>
-  ${cats.map(c=>`
-    <div class="card" onclick="S.openCat='${c.key}';render();scrollTo(0,0)" style="cursor:pointer">
-      <div class="row">
-        <div class="dot">${c.icon}</div>
-        <div class="grow">
-          <div class="row"><span style="font-size:13.5px;font-weight:650" class="grow">${esc(c.label)}</span>
-            <span style="font-weight:650">${$m0(c.cents)}</span></div>
-          <div class="bar" style="margin-top:7px"><i style="width:${c.cents/max*100}%"></i></div>
-          <div class="row" style="margin-top:5px">
-            <span class="tiny grow" style="color:var(--dim)">${c.subs.slice(0,3).map(s=>title(s.key)).join(' · ')}</span>
-            <span class="tiny muted">${c.share}%</span></div>
-        </div>
-        <span class="muted" style="margin-left:2px">›</span>
-      </div>
-    </div>`).join('') || '<div class="card"><div class="tiny muted">No spending in this period.</div></div>'}
-
-  ${sp?.uncategorisedShare > 8 ? `<div class="card" style="border-color:var(--warn)">
-    <div class="tiny" style="line-height:1.6"><b style="color:var(--ink)">${sp.uncategorisedShare}% is uncategorised.</b>
-    That's higher than it should be — tap Uncategorised above and tell me what those merchants are, and I'll add rules for them.</div></div>` : ''}
-
-  ${fc ? `<div class="sec"><span class="lbl">12-month forecast</span><span class="act">with bands</span></div>
-  <div class="card">
-    ${sparkline(fc.months)}
-    <div class="tiny muted" style="margin-top:11px;padding-top:11px;border-top:1px solid var(--line);line-height:1.6">
-      Acting on what's in Save trends monthly spend from <b style="color:var(--ink)">${$m0(fc.months[0].projectedCents)}</b>
-      to <b class="ok">${$m0(fc.months[11].projectedCents)}</b>. The shaded band is real uncertainty — the wide part needs <i>you</i> to change, not just the app.
-    </div>
-  </div>` : ''}
+  <div class="sec"><span class="lbl">Recent activity</span><span class="act">last 30 days</span></div>
+  <div class="card"><div class="row">
+    <span class="tiny muted grow">Spent ${$m0(sp?.totalCents ?? 0)} · full breakdown lives in <b style="color:var(--ink)">Save</b></span>
+    <button class="chipbtn" onclick="S.tab='save';render()">Open</button></div></div>
 
   <div class="sec"><span class="lbl">Recent</span></div>
   <div class="card">
@@ -374,7 +346,10 @@ function sparkline(months) {
 
 /* ---------------------------------------------------------------- save */
 function viewSave() {
-  const sv = S.save;
+  const sv = S.save, sp = S.spend, fc = S.forecast, cats = sp?.categories ?? [];
+  const max = cats[0]?.cents ?? 1;
+  const open = S.openCat;
+  if (open) return viewCategoryDetail(open);
   return `
   <div class="top"><h1>Save</h1><span class="sp"></span>
     <button class="chipbtn" onclick="runAgentsNow()">${S.busy?'<span class="spin"></span>':'↻ recheck'}</button></div>
@@ -386,7 +361,45 @@ function viewSave() {
     <div class="tiny muted" style="margin-top:8px">${sv?.events.length ?? 0} recorded · ${$m0(sv?.totalAnnualOpportunityCents ?? 0)}/yr still on the table</div>
   </div>
 
-  <div class="sec"><span class="lbl">Everything found</span></div>
+  <div class="sec"><span class="lbl">What you actually spend</span><span class="act">last 30 days</span></div>
+  <div class="card"><div class="tiny muted">Total spent</div>
+    <div class="big" style="margin-top:4px">${$m0(sp?.totalCents ?? 0)}</div>
+    <div class="tiny muted" style="margin-top:6px">Investments, card payments, taxes and transfers excluded — see Pay</div></div>
+
+  <div class="sec"><span class="lbl">Categories</span><span class="act">tap to open</span></div>
+  ${cats.map(c=>`
+    <div class="card" onclick="S.openCat='${c.key}';render();scrollTo(0,0)" style="cursor:pointer">
+      <div class="row">
+        <div class="dot">${c.icon}</div>
+        <div class="grow">
+          <div class="row"><span style="font-size:13.5px;font-weight:650" class="grow">${esc(c.label)}</span>
+            <span style="font-weight:650">${$m0(c.cents)}</span></div>
+          <div class="bar" style="margin-top:7px"><i style="width:${c.cents/max*100}%"></i></div>
+          <div class="row" style="margin-top:5px">
+            <span class="tiny grow" style="color:var(--dim)">${c.subs.slice(0,3).map(s=>title(s.key)).join(' · ')}</span>
+            <span class="tiny muted">${c.share}%</span></div>
+        </div>
+        <span class="muted" style="margin-left:2px">›</span>
+      </div>
+    </div>`).join('') || '<div class="card"><div class="tiny muted">No spending in this period.</div></div>'}
+
+  ${sp?.uncategorisedShare > 5 ? `<div class="card" style="border-color:var(--warn)">
+    <div class="tiny" style="line-height:1.6"><b style="color:var(--warn)">${sp.uncategorisedShare}% uncategorised.</b>
+    No rule list covers every merchant. Tell me what these are and I'll remember them permanently.</div>
+    <button class="btn ghost" onclick="teachNext()">Categorise them (${(S.unknowns||[]).length} left)</button>
+  </div>` : ''}
+
+  ${fc ? `<div class="sec"><span class="lbl">12-month forecast</span><span class="act">with bands</span></div>
+  <div class="card">
+    ${sparkline(fc.months)}
+    <div class="tiny muted" style="margin-top:11px;padding-top:11px;border-top:1px solid var(--line);line-height:1.6">
+      Acting on what's in Save trends monthly spend from <b style="color:var(--ink)">${$m0(fc.months[0].projectedCents)}</b>
+      to <b class="ok">${$m0(fc.months[11].projectedCents)}</b>. The shaded band is real uncertainty — the wide part needs <i>you</i> to change, not just the app.
+    </div>
+  </div>` : ''}
+
+
+  <div class="sec"><span class="lbl">Worth stopping</span><span class="act">${(sv?.opportunities??[]).length} found</span></div>
   ${(sv?.opportunities ?? []).map((o,i)=>`
     <div class="card">
       <div class="row" style="align-items:flex-start">
@@ -570,6 +583,20 @@ function viewSettings() {
   <div class="sec"><span class="lbl">Danger</span></div>
   <div class="card"><button class="btn ghost" style="color:var(--dang)" onclick="wipe()">Erase everything and start over</button></div>
   ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}`;
+}
+
+async function teachNext() {
+  const u = (S.unknowns || [])[0];
+  if (!u) { alert('Nothing left to categorise.'); return; }
+  const t = S.taxonomy || [];
+  const pick = prompt(`${u.name}\n$${Math.round(u.cents/100).toLocaleString()} across ${u.count} transaction(s)\n\n` +
+    t.map((c,i)=>`${i+1}. ${c.label}`).join('\n') + '\n\nType a number:');
+  if (!pick) return;
+  const c = t[parseInt(pick,10)-1];
+  if (!c) return;
+  await api('/api/teach', { merchant: u.name.toLowerCase().slice(0,40), category: c.key });
+  await load();
+  if ((S.unknowns||[]).length) setTimeout(teachNext, 200);
 }
 
 async function setCard(id, cardKey) { await api('/api/instruments/card', { id, cardKey }); await load(); }

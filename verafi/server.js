@@ -17,7 +17,7 @@ import { Plaid, toCoreTx } from './plaid.js';
 import { importCsv, importOfx } from './importers.js';
 import { runAgents, AGENTS } from './agents.js';
 import { expensesOnly, breakdown, classify, FLOW } from './classify.js';
-import { categoriseAll, categorise, TAXONOMY } from './categories.js';
+import { categoriseAll, categorise, TAXONOMY, unknownMerchants } from './categories.js';
 import { VERSION, BUILT, FEATURES } from './version.js';
 import { RESEARCH, ask as askResearch } from './research.js';
 import { isDealQuery, researchDeal, spendingContext, COST, dealPresets, holdDeal, approvalSummary } from './deals.js';
@@ -235,7 +235,7 @@ const ROUTES = {
     const tx = expensesOnly(all).filter(t => t.amountCents > 0);
     const flows = breakdown(all);
     // Full taxonomy with subcategories and per-merchant rollups, so the UI can drill in.
-    const categories = categoriseAll(tx);
+    const categories = categoriseAll(tx, D.learned);
     const byCat = Object.fromEntries(categories.map(c => [c.key, c.cents]));
     const byMerchant = {};
     for (const t of tx) byMerchant[t.merchantName ?? t.merchantId] = (byMerchant[t.merchantName ?? t.merchantId] ?? 0) + t.amountCents;
@@ -475,6 +475,36 @@ const ROUTES = {
     return { removed: before - D.transactions.length, remaining: D.transactions.length };
   },
 
+  /** The biggest merchants we could not classify — worth asking the user about. */
+  'GET /api/unknowns': async () => ({
+    unknowns: unknownMerchants(expensesOnly(store.tx())),
+    taxonomy: Object.entries(TAXONOMY).map(([k,v]) => ({ key:k, label:v.label, icon:v.icon, subs:v.subs }))
+  }),
+
+  /** Teach it. Your answer beats our rules, permanently. */
+  'POST /api/teach': async (b) => {
+    if (!b.merchant || !b.category) return { status:422, error:'need a merchant and a category' };
+    D.learned ??= {};
+    D.learned[String(b.merchant).toLowerCase().slice(0,40)] = { category:b.category, subcategory:b.subcategory ?? 'unknown' };
+    D.findings = []; D.seenFindings = {};
+    store.save();
+    return { learned: Object.keys(D.learned).length };
+  },
+
+  /** One-off repair for rows imported before the date-prefix bug was fixed. */
+  'POST /api/repair': async () => {
+    let fixed = 0;
+    for (const t of D.transactions) {
+      const clean = String(t.merchantName ?? '')
+        .replace(/^\s*\d{4}[-\s]\d{2}[-\s]\d{2}\s*[:\-]?\s*/, '')
+        .replace(/\s+in$/i, '').trim();
+      if (clean && clean !== t.merchantName) { t.merchantName = clean; fixed++; }
+    }
+    D.findings = []; D.seenFindings = {};
+    store.save();
+    return { repaired: fixed };
+  },
+
   'POST /api/reset': async () => { store.reset(); return { reset:true }; },
   'GET /api/runs': async () => ({ runs: D.runs.slice(0, 30) }),
   'GET /api/health': async () => ({ ok:true, version: VERSION, built: BUILT, features: FEATURES,
@@ -500,6 +530,14 @@ const server = http.createServer(async (req, res) => {
   }
   const p = url.pathname === '/' ? '/index.html' : url.pathname;
   try {
+    // Version-stamp asset URLs as the HTML goes out. A deploy can never leave a browser
+    // holding a stale bundle again - which cost us most of a day.
+    if (p === '/index.html') {
+      let html = await readFile(join(__dir, 'public', p), 'utf8');
+      html = html.replace(/(src|href)="(\/(?:app\.js|styles\.css))(\?v=[^"]*)?"/g, `$1="$2?v=${VERSION}"`);
+      res.writeHead(200, { 'content-type':'text/html', 'cache-control':'no-store' });
+      return res.end(html);
+    }
     const buf = await readFile(join(__dir, 'public', p));
     res.writeHead(200, { 'content-type': MIME[extname(p)] ?? 'application/octet-stream' });
     return res.end(buf);
