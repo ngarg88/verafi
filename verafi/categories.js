@@ -126,7 +126,34 @@ const RULES = [
   [/storage|public storage|extra space|u-?haul/i,                             'services','storage'],
 
   // giving
-  [/donation|donate|charity|red cross|unicef|goodwill|salvation army|gofundme|patreon|church|temple|mosque|synagogue|tithe/i,'charity','donations']
+  [/donation|donate|charity|red cross|unicef|goodwill|salvation army|gofundme|patreon|church|temple|mosque|synagogue|tithe/i,'charity','donations'],
+
+  // ---------------------------------------------------------------------------
+  // REAL BANK DESCRIPTORS
+  // Statements abbreviate, truncate and prefix. These rules were written against
+  // actual descriptor text rather than tidy merchant names, which is why the first
+  // version of this file left 96% of a real account uncategorised.
+  // ---------------------------------------------------------------------------
+  [/prog(ressive)?[ _-]|geico|state ?farm|allstate|nationwide|libertymut|travelers ins|erie ins|amfam|farmers ins|\bins prem\b|insurance/i,'bills','insurance'],
+  [/mortgage|mtg\b|escrow|property ?tax|hoa\b|homeowners assoc/i,'bills','rent'],
+  [/con ?ed|pseg|pse&g|national grid|dominion|duke ener|xcel|ameren|entergy|nicor|socalgas|水|utility|elec(tric)?\b|water dept|sewer|trash|refuse/i,'bills','utilities'],
+  [/vetsource|vca ?animal|banfield|petmed|animal hosp|veterinar|\bvet\b/i,'shopping','pets'],
+  [/dr\.? |md\b|\bdds\b|physician|pediatr|derma|ortho|radiolog|anesth|surgery ctr|hlth|health(care)?\b|medical/i,'health','doctor'],
+  [/childcare|kindercare|goddard|primrose|daycare|nursery|after ?school|camp\b/i,'kids','childcare'],
+  [/sq \*|square \*|tst\*|toast|clover|shopify|stripe charge/i,'shopping','online'],
+  [/paypal \*|pp\*|venmo \*/i,'shopping','online'],
+  [/amzn mktp|amazon\.com|amazon mktpl|amzn digital|prime video|amazon prime/i,'shopping','online'],
+  [/apl\*|apple\.com\/bill|itunes|app ?store/i,'subscription','software'],
+  [/googl?e? \*|google ?svcs|youtube ?(premium|tv)/i,'subscription','software'],
+  [/wm supercenter|wal-?mart|wm supercntr/i,'shopping','online'],
+  [/exxonmobil|speedway|racetrac|caseys|pilot ?travel|loves ?travel|wawa|circle ?k/i,'transport','fuel'],
+  [/ez ?pass|nj ?turnpike|port auth|\bpath\b|njt\b|nj ?transit|lirr|metro ?north/i,'transport','transit'],
+  [/nyc ?parking|impark|laz ?park|icon ?park/i,'transport','parking'],
+  [/liquor|wine ?& ?spirits|total ?wine|bevmo/i,'dining','bars'],
+  [/dry ?clean|laundr|tailor|cobbler|alteration/i,'services','cleaning'],
+  [/home ?depot|lowes|ace ?hardware|sherwin|menards|tractor ?supply/i,'shopping','home'],
+  [/\bacme\b|shoprite|stop ?& ?shop|food ?town|key ?food|c-?town|foodtown|grocery|market\b/i,'grocery','supermarket'],
+  [/nail|lash|brow|spa\b|massage envy|great ?clips|supercuts/i,'personal','salon']
 ];
 
 /** Returns { category, subcategory, confidence, matched }. */
@@ -155,9 +182,15 @@ export function categoriseAll(txs) {
     if (t.amountCents <= 0) continue;
     // Always run the merchant rules — they are far more specific than whatever the
     // importer guessed. The old category is only a fallback when nothing matches.
+    // Order matters: our specific rules first, then whatever the aggregator said,
+    // and only then "other". Dumping straight to "other" is what made this useless.
     let c = categorise(t.merchantName ?? t.merchantId, t.category);
-    if (c.category === 'other' && t.category && TAXONOMY[t.category])
+    if (c.category === 'other' && t.category && TAXONOMY[t.category] && t.category !== 'other')
       c = { category: t.category, subcategory: 'unknown', confidence: 0.5 };
+    if (c.category === 'other' && t.plaidCategory) {
+      const g = categorise('', t.plaidCategory);
+      if (g.category !== 'other') c = g;
+    }
     const C = (cats[c.category] ??= { cents:0, count:0, subs:{}, merchants:{} });
     C.cents += t.amountCents; C.count++;
     const S = (C.subs[c.subcategory] ??= { cents:0, count:0 });

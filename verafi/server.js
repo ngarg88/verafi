@@ -18,8 +18,10 @@ import { importCsv, importOfx } from './importers.js';
 import { runAgents, AGENTS } from './agents.js';
 import { expensesOnly, breakdown, classify, FLOW } from './classify.js';
 import { categoriseAll, categorise, TAXONOMY } from './categories.js';
+import { VERSION, BUILT, FEATURES } from './version.js';
 import { RESEARCH, ask as askResearch } from './research.js';
-import { isDealQuery, researchDeal, spendingContext, COST } from './deals.js';
+import { isDealQuery, researchDeal, spendingContext, COST, dealPresets, holdDeal, approvalSummary } from './deals.js';
+import { makeRule, describe as describeRule, runRule, dueRules, SOURCE } from './rules.js';
 
 /**
  * Seed the full agent catalog so you can enable any of them, not just the ones your
@@ -148,7 +150,7 @@ const ROUTES = {
     const tx = store.tx();
     const signals = tx.length ? deriveSignals(tx) : null;
     return {
-      plaidConfigured: !!plaid, plaidEnv: process.env.PLAID_ENV ?? 'sandbox',
+      plaidConfigured: !!plaid, plaidEnv: process.env.PLAID_ENV ?? 'sandbox', version: VERSION,
       authRequired: authRequired(), findings: D.findings ?? [],
       linked: !!D.profile.linkedAt, transactions: tx.length,
       connections: D.connections.map(c => ({ id:c.id, institution:c.institution, accounts:c.accounts, linkedAt:c.linkedAt })),
@@ -381,6 +383,55 @@ const ROUTES = {
   },
 
   /** Research agents. capability = recommend. Nothing here can spend money. */
+  /** Deal surface tuned to this user's own categories and budgets. */
+  'GET /api/deals/presets': async () => ({ categories: dealPresets(store.tx()) }),
+
+  /** Programmatic hunts: typed parameters, hard ceiling, never buys. */
+  'GET /api/hunts': async () => ({
+    hunts: (D.hunts ?? []).map(h => ({ ...h, summary: describeRule(h) })),
+    sources: [{ key: SOURCE.OWN_HISTORY, label: 'Watch my own purchases', cost: 'free' },
+              { key: SOURCE.WEB, label: 'Search the web', cost: 'needs an API key' }]
+  }),
+  'POST /api/hunts': async (b) => {
+    try {
+      const r = makeRule({ ...b, ceilingCents: Math.round(Number(b.ceilingCents)) });
+      (D.hunts ??= []).unshift(r); store.save();
+      return { hunt: { ...r, summary: describeRule(r) } };
+    } catch (e) { return { status: 422, error: e.message }; }
+  },
+  'POST /api/hunts/toggle': async (b) => {
+    const h = (D.hunts ?? []).find(x => x.id === b.id);
+    if (!h) return { status:404, error:'not found' };
+    h.enabled = !!b.enabled; store.save(); return { hunt: h };
+  },
+  'POST /api/hunts/delete': async (b) => {
+    D.hunts = (D.hunts ?? []).filter(x => x.id !== b.id); store.save(); return { ok:true };
+  },
+  'POST /api/hunts/run': async (b) => {
+    const h = (D.hunts ?? []).find(x => x.id === b.id);
+    if (!h) return { status:404, error:'not found' };
+    const run = store.startRun('hunt: ' + h.name);
+    const out = await runRule({ rule: h, store, apiKey: process.env.ANTHROPIC_API_KEY });
+    store.step(run, 'hunt.evaluate', { ceiling: h.ceilingCents, traits: h.traits },
+      { matches: out.matches.length, why: out.why });
+    store.finishRun(run);
+    store.save();
+    return { ...out, hunt: { ...h, summary: describeRule(h) } };
+  },
+
+  /** Pin a deal. Cannot pay - keeps watching and hands off to the merchant checkout. */
+  'POST /api/deals/hold': async (b) => ({ item: holdDeal({ store, ...b }) }),
+  'GET /api/deals/watchlist': async () => ({ items: D.watchlist ?? [] }),
+  'POST /api/deals/approve': async (b) => {
+    const item = (D.watchlist ?? []).find(i => i.id === b.id);
+    if (!item) return { status:404, error:'not found' };
+    return approvalSummary(item, store.tx());
+  },
+  'POST /api/deals/drop': async (b) => {
+    D.watchlist = (D.watchlist ?? []).filter(i => i.id !== b.id); store.save();
+    return { ok:true };
+  },
+
   'GET /api/research': async () => ({
     presets: Object.entries(RESEARCH).map(([k, r]) => ({ key:k, label:r.label, hint:r.hint, icon:r.icon }))
   }),
@@ -426,7 +477,8 @@ const ROUTES = {
 
   'POST /api/reset': async () => { store.reset(); return { reset:true }; },
   'GET /api/runs': async () => ({ runs: D.runs.slice(0, 30) }),
-  'GET /api/health': async () => ({ ok:true, plaid: !!plaid, env: process.env.PLAID_ENV ?? 'sandbox' })
+  'GET /api/health': async () => ({ ok:true, version: VERSION, built: BUILT, features: FEATURES,
+     plaid: !!plaid, env: process.env.PLAID_ENV ?? 'sandbox' })
 };
 
 const MIME = { '.html':'text/html','.css':'text/css','.js':'text/javascript','.json':'application/json','.svg':'image/svg+xml','.webmanifest':'application/manifest+json' };
@@ -471,6 +523,17 @@ async function scheduled() {
       }
       D.transactions.sort((a,b) => b.postedAt - a.postedAt);
     }
+    // Hunts run on the same daily beat. Matches land in the Spend queue for approval.
+    for (const h of dueRules(D.hunts)) {
+      try {
+        const out = await runRule({ rule: h, store, apiKey: process.env.ANTHROPIC_API_KEY });
+        if (out.matches?.length) await notify({
+          title: `Verafi found a match: ${h.name}`,
+          lines: out.matches.map(m => `${m.title} — $${Math.round(m.foundPriceCents/100)}`),
+          url: process.env.PUBLIC_URL }).catch(()=>{});
+      } catch (e) { console.error('hunt failed:', h.name, e.message); }
+    }
+    store.save();
     const { fresh } = runAgents({ store, cardRules: CARD_RULES });
     if (fresh.length) await notify({
       title: `Verafi found ${fresh.length} thing${fresh.length>1?'s':''} worth $${Math.round(fresh.reduce((a,f)=>a+f.annualCents,0)/100)}/yr`,
@@ -486,6 +549,17 @@ setTimeout(scheduled, 15_000);                       // once shortly after boot
 setInterval(async () => {
   const added = await scanStatements();
   if (added) {
+    // Hunts run on the same daily beat. Matches land in the Spend queue for approval.
+    for (const h of dueRules(D.hunts)) {
+      try {
+        const out = await runRule({ rule: h, store, apiKey: process.env.ANTHROPIC_API_KEY });
+        if (out.matches?.length) await notify({
+          title: `Verafi found a match: ${h.name}`,
+          lines: out.matches.map(m => `${m.title} — $${Math.round(m.foundPriceCents/100)}`),
+          url: process.env.PUBLIC_URL }).catch(()=>{});
+      } catch (e) { console.error('hunt failed:', h.name, e.message); }
+    }
+    store.save();
     const { fresh } = runAgents({ store, cardRules: CARD_RULES });
     if (fresh.length) await notify({
       title: `Verafi found ${fresh.length} thing${fresh.length>1?'s':''} worth $${Math.round(fresh.reduce((a,f)=>a+f.annualCents,0)/100)}/yr`,
@@ -510,5 +584,6 @@ server.listen(PORT, HOST, () => {
   if (authRequired()) console.log(`  🔒 passcode required`);
   console.log(`  agents         ${D.agents.filter(a=>a.enabled).length} on · every ${(EVERY/3600000).toFixed(0)}h · ${process.env.NTFY_TOPIC ? 'ntfy alerts' : 'no notifications configured'}`);
   console.log(`  statements     drop CSV/OFX files in verafi/statements/ — imported automatically`);
+  console.log(`  version        ${VERSION} (${BUILT})`);
   console.log(`  findings       ${(D.findings ?? []).length} worth $${Math.round((D.findings ?? []).reduce((a,f)=>a+f.annualCents,0)/100).toLocaleString()}/yr\n`);
 });

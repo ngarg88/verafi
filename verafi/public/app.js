@@ -10,10 +10,10 @@ const $m0 = (c) => (c/100).toLocaleString('en-US',{style:'currency',currency:'US
 const esc = (s) => String(s ?? '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 const title = (s) => String(s ?? '').replace(/[-_]/g,' ').replace(/\b\w/g, m => m.toUpperCase());
 
-const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, spend:null, save:null, forecast:null, busy:false, error:null };
+const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, lastQuery:null, spend:null, save:null, forecast:null, busy:false, error:null };
 
 const ICONS = {
-  ask:'<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  ask:'<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
   spend:'<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M2 9.5h20"/>',
   save:'<path d="M12 3v18"/><path d="M17 7.5c0-2-2.2-3-5-3s-5 1-5 3 2.2 2.7 5 3.3 5 1.4 5 3.4-2.2 3.3-5 3.3-5-1.2-5-3.2"/>',
   wallet:'<rect x="3" y="7" width="18" height="12" rx="2.5"/><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18"/><circle cx="16.5" cy="13" r="1.3"/>',
@@ -24,8 +24,22 @@ async function load() {
   try { S.state = await api('/api/state'); S.locked = false; }
   catch (e) { if (/locked/i.test(e.message)) { S.locked = true; S.state = null; return render(); } throw e; }
   if (S.state.linked) {
-    const [sp, sv, fc, cd, rs] = await Promise.all([api('/api/spend?days=30'), api('/api/save'), api('/api/forecast'), api('/api/cards'), api('/api/research')]);
-    Object.assign(S, { spend:sp, save:sv, forecast:fc, cards:cd, presets: rs.presets });
+    // One missing endpoint must never blank the whole app. Each call fails on its own.
+    const safe = (p) => api(p).catch(e => ({ __failed: p, __error: e.message }));
+    const [sp, sv, fc, cd, rs, dc, wl, hu] = await Promise.all([
+      safe('/api/spend?days=30'), safe('/api/save'), safe('/api/forecast'),
+      safe('/api/cards'), safe('/api/research'), safe('/api/deals/presets'), safe('/api/deals/watchlist'), safe('/api/hunts')
+    ]);
+    const failed = [sp,sv,fc,cd,rs,dc,wl,hu].filter(x => x?.__failed).map(x => x.__failed);
+    Object.assign(S, {
+      spend: sp.__failed ? null : sp, save: sv.__failed ? null : sv,
+      forecast: fc.__failed ? null : fc, cards: cd.__failed ? null : cd,
+      presets: rs.__failed ? null : rs.presets,
+      dealCats: dc?.__failed ? [] : dc.categories,
+      watchlist: wl?.__failed ? [] : wl.items,
+      hunts: hu?.__failed ? [] : hu.hunts,
+      staleServer: failed.length ? failed : null
+    });
   }
   render();
 }
@@ -85,136 +99,157 @@ function viewOnboard() {
   ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}`;
 }
 
-/* ---------------------------------------------------------------- ask */
-function viewAsk() {
-  const sv = S.save, st = S.state;
-  const opp = sv?.totalAnnualOpportunityCents ?? 0;
-  return `
-  <div class="top"><h1>Verafi</h1><span class="sp"></span>
-    <button class="chipbtn" onclick="runAgentsNow()">${S.busy?'<span class="spin"></span>':'↻ run'}</button>
-    <button class="chipbtn" onclick="S.tab='settings';render();scrollTo(0,0)">⚙</button>
-    <button class="chipbtn" onclick="toggleTheme()">◐</button></div>
+/* ---------------------------------------------------------------- shop */
+function viewShop() {
+  const r = S.answer, cats = S.dealCats ?? [], watch = S.watchlist ?? [];
+  const open = S.openDeal;
 
-  <div class="card" style="background:linear-gradient(160deg,color-mix(in srgb,var(--save) 8%,transparent),transparent 70%),var(--card)">
-    <div class="tiny muted">Found in your accounts</div>
-    <div class="big ${opp?'ok':''}" style="margin-top:5px">${$m0(opp)}<span style="font-size:15px;font-family:ui-sans-serif" class="muted"> / year</span></div>
-    <div class="tiny muted" style="margin-top:8px">${sv?.opportunities.length ?? 0} things worth fixing · ${st.transactions} transactions read</div>
-  </div>
-
-  ${(st.findings ?? []).length ? `
-  <div class="sec"><span class="lbl">Your agents found</span>
-    <button class="act" onclick="runAgentsNow()">${S.busy?'running…':'run now'}</button></div>
-  ${st.findings.slice(0,6).map(f=>`
+  if (open) {
+    const c = cats.find(x => x.key === open);
+    return `
+    <div class="top"><button class="chipbtn" onclick="S.openDeal=null;S.answer=null;render()">← Shop</button><span class="sp"></span></div>
+    <div class="card"><div class="row">
+      <div class="dot">${c.icon}</div>
+      <div class="grow"><div style="font-weight:650;font-size:15px">${esc(c.label)}</div>
+      <div class="tiny muted" style="margin-top:3px">${esc(c.basis)}</div></div></div>
+    </div>
+    <div class="sec"><span class="lbl">Ask the agent</span><span class="act">budget ~$${c.budget}</span></div>
+    ${c.asks.map(a=>`<div class="card" onclick="doAsk(null,${JSON.stringify(a).replace(/"/g,'&quot;')})" style="cursor:pointer">
+      <div class="row"><span class="grow" style="font-size:13.5px;line-height:1.45">${esc(a)}</span><span class="muted">›</span></div></div>`).join('')}
     <div class="card">
-      <div class="row" style="align-items:flex-start">
-        <div class="grow">
-          <div style="font-weight:650;font-size:14px">${esc(f.title)}</div>
-          <div class="tiny muted" style="margin-top:5px;line-height:1.55">${esc(f.detail)}</div>
-          <div class="tiny" style="margin-top:7px;color:var(--dim)">${esc(f.agent.replace(/_/g,' '))}</div>
-        </div>
-        <div style="text-align:right;flex:0 0 auto">
-          <div style="font-weight:700;color:var(--save)">${$m0(f.annualCents)}</div>
-          <div class="tiny muted">a year</div>
-        </div>
-      </div>
-      <button class="btn ghost" onclick="dismiss('${f.agent}:${String(f.ref).replace(/'/g,"")}')">Dismiss</button>
-    </div>`).join('')}` : `
-  <div class="sec"><span class="lbl">Your agents</span>
-    <button class="act" onclick="runAgentsNow()">${S.busy?'running…':'run now'}</button></div>
-  <div class="card"><div class="tiny muted">No findings yet. Switch on an agent below, then tap <b>run now</b>.</div></div>`}
+      <input id="q" placeholder="or ask your own…" style="border:0;padding:4px 0;font-size:15px"
+             onkeydown="if(event.key==='Enter')doAsk()"/>
+      <button class="btn go" onclick="doAsk()">${S.busy?'Researching…':'Search'}</button>
+    </div>
+    ${answerCard(r)}`;
+  }
 
-  <div class="sec"><span class="lbl">Biggest wins</span><span class="act">By annual value</span></div>
-  ${(sv?.opportunities ?? []).slice(0,5).map((o,i)=>`
-    <div class="card">
-      <div class="row" style="align-items:flex-start">
-        <div class="dot">${o.kind==='cancel'?'✕':o.kind==='fees'?'$':'↻'}</div>
-        <div class="grow">
-          <div style="font-weight:650;font-size:14px">${title(o.merchant)}</div>
-          <div class="tiny muted" style="margin-top:4px;line-height:1.5">${esc(o.evidence)}</div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-weight:700;color:var(--save)">${$m0(o.annualCents)}</div>
-          <div class="tiny muted">a year</div>
-        </div>
-      </div>
-      <button class="btn ghost" onclick="claim(${i})">I did this — count it</button>
-    </div>`).join('') || '<div class="card"><div class="empty tiny">Nothing found yet. Import more history.</div></div>'}
-
-  <div class="sec"><span class="lbl">Agents watching</span><span class="act">${(st.agents??[]).filter(a=>a.enabled).length} on</span></div>
-  ${(st.agents ?? []).map(a=>`
-    <div class="card" style="${a.enabled?'':'opacity:.6'}">
-      <div class="row" style="align-items:flex-start">
-        <div class="grow">
-          <div class="row" style="gap:6px"><span style="font-weight:650;font-size:13.5px">${esc(a.name)}</span>
-            <span class="badge b-spend">${a.surface}</span></div>
-          <div class="tiny muted" style="margin-top:4px;line-height:1.5"><b>Learned:</b> ${esc(a.evidence)}</div>
-          ${a.confidence!=null?`<div class="row" style="margin-top:7px;gap:7px">
-            <div class="bar" style="width:56px;margin:0"><i style="width:${a.confidence*100}%"></i></div>
-            <span class="tiny" style="color:var(--dim)">${Math.round(a.confidence*100)}% confident</span></div>`:''}
-        </div>
-        <div class="tog ${a.enabled?'on':''}" onclick="toggleAgent('${a.id}',${!a.enabled})"><i></i></div>
-      </div>
-    </div>`).join('')}
-  ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}`;
-}
-
-/* ---------------------------------------------------------------- ask */
-function viewAsk() {
-  const r = S.answer;
   return `
-  <div class="top"><h1>Ask</h1><span class="sp"></span>
+  <div class="top"><h1>Shop</h1><span class="sp"></span>
     <button class="chipbtn" onclick="S.tab='settings';render()">⚙</button></div>
-  <div class="tiny muted">Research agents. They read your history and answer — they cannot spend.</div>
+  <div class="tiny muted">Agents that find things worth buying — priced against what you actually spend.</div>
 
   <div class="card">
     <input id="q" placeholder="all-inclusive to the Bahamas, Labor Day, 2 adults 2 kids"
            style="border:0;padding:4px 0;font-size:15px" onkeydown="if(event.key==='Enter')doAsk()"/>
-    <button class="btn go" onclick="doAsk()">${S.busy?'Researching…':'Ask'}</button>
-    <div class="tiny" style="color:var(--dim);margin-top:9px;line-height:1.5">
-      Questions about <b style="color:var(--mut)">your money</b> are answered from your history.
-      Questions about <b style="color:var(--mut)">what to buy</b> search the web.
-    </div>
+    <button class="btn go" onclick="doAsk()">${S.busy?'Researching…':'Find it'}</button>
   </div>
 
-  <div class="sec"><span class="lbl">Or pick one</span></div>
-  ${(S.presets ?? []).map(p=>`
-    <div class="card" onclick="doAsk('${p.key}')" style="cursor:pointer">
+  ${watch.length ? `<div class="card" onclick="S.tab='spend';render()" style="cursor:pointer;border-color:var(--save)">
+    <div class="row"><span class="grow tiny" style="line-height:1.5">
+      <b style="color:var(--ink)">${watch.length} item${watch.length>1?'s':''} waiting in Spend</b> for you to review and buy.</span>
+      <span class="muted">›</span></div></div>` : ''}
+
+  <div class="sec"><span class="lbl">Standing hunts</span>
+    <button class="act" onclick="newHunt()">+ new</button></div>
+  ${(S.hunts ?? []).length ? S.hunts.map(h=>`
+    <div class="card" style="${h.enabled?'':'opacity:.6'}">
+      <div class="row" style="align-items:flex-start">
+        <div class="grow">
+          <div style="font-size:13.5px;font-weight:650">${esc(h.name)}</div>
+          <div class="tiny muted" style="margin-top:4px;line-height:1.5">${esc(h.summary)}</div>
+          <div class="tiny" style="color:var(--dim);margin-top:5px">
+            ${h.runs} checks${h.matches.length?` · ${h.matches.length} match${h.matches.length>1?'es':''}`:' · nothing yet'}</div>
+        </div>
+        <div class="tog ${h.enabled?'on':''}" onclick="toggleHunt('${h.id}',${!h.enabled})"><i></i></div>
+      </div>
+      <div class="row" style="gap:8px;margin-top:10px">
+        <button class="btn ghost" onclick="runHunt('${h.id}')">${S.busy?'Checking…':'Check now'}</button>
+        <button class="btn ghost" style="width:auto;padding:13px 16px" onclick="deleteHunt('${h.id}')">✕</button>
+      </div>
+    </div>`).join('')
+   : `<div class="card"><div class="tiny muted" style="line-height:1.6">No standing hunts. A hunt is a hard ceiling plus what you require — <b style="color:var(--ink)">"all-inclusive Bahamas, nonstop, 4 nights, 2 adults 2 kids, under $2,800"</b>. The agent checks daily and drops matches into Spend. It can never buy.</div></div>`}
+
+  <div class="sec"><span class="lbl">Your categories</span><span class="act">by what you spend</span></div>
+  ${cats.map(c=>`
+    <div class="card" onclick="S.openDeal='${c.key}';S.answer=null;render();scrollTo(0,0)" style="cursor:pointer">
       <div class="row">
-        <div class="dot">${p.icon}</div>
-        <div class="grow"><div style="font-size:13.5px;font-weight:650">${esc(p.label)}</div>
-        <div class="tiny muted" style="margin-top:3px;line-height:1.5">${esc(p.hint)}</div></div>
+        <div class="dot">${c.icon}</div>
+        <div class="grow"><div style="font-size:13.5px;font-weight:650">${esc(c.label)}</div>
+          <div class="tiny muted" style="margin-top:3px">${esc(c.basis)}</div></div>
         <span class="muted">›</span>
       </div>
     </div>`).join('')}
 
-  ${r ? `
-    <div class="sec"><span class="lbl">${esc(r.label)}</span><span class="act">${r.latencyMs}ms</span></div>
+  ${answerCard(r)}
+  ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}`;
+}
+
+function answerCard(r) {
+  if (!r) return '';
+  return `
+    <div class="sec"><span class="lbl">${esc(r.label ?? 'Answer')}</span>${r.costUsd?`<span class="act">$${r.costUsd.toFixed(3)}</span>`:''}</div>
     <div class="card">
       <div style="font-size:14px;line-height:1.65;white-space:pre-wrap">${md(r.answer)}</div>
       ${r.howToFix ? `<div class="guard" style="margin-top:12px">
         <div style="color:var(--ink);font-weight:650;margin-bottom:6px">To switch this on</div>
         ${r.howToFix.map(h=>`<div style="line-height:1.7">· ${esc(h)}</div>`).join('')}</div>`:''}
-      ${r.evidence.length ? `<div style="margin-top:12px;padding-top:11px;border-top:1px solid var(--line)">
+      ${(r.evidence||[]).length ? `<div style="margin-top:12px;padding-top:11px;border-top:1px solid var(--line)">
         <div class="tiny" style="color:var(--dim);font-weight:700;letter-spacing:.6px;margin-bottom:7px">WHAT I LOOKED AT</div>
-        ${r.evidence.map(e=>`<div class="tiny muted" style="line-height:1.7">· ${md(e)}</div>`).join('')}
-      </div>`:''}
+        ${r.evidence.map(e=>`<div class="tiny muted" style="line-height:1.7">· ${md(e)}</div>`).join('')}</div>`:''}
+      ${r.ok ? `<button class="btn ghost" onclick="holdFromAnswer()">Hold this and watch the price</button>`:''}
       <div class="tiny" style="color:var(--dim);margin-top:11px;padding-top:9px;border-top:1px solid var(--line)">
-        ${r.steps.map(st=>`<div style="line-height:1.6">✓ ${esc(st.tool)} — ${esc(st.detail)}</div>`).join('')}
-        <div style="margin-top:6px">🔒 ${esc(r.disclaimer)}</div>
+        ${(r.steps||[]).map(st=>`<div style="line-height:1.6">✓ ${esc(st.tool)} — ${esc(st.detail)}</div>`).join('')}
+        <div style="margin-top:6px">🔒 ${esc(r.disclaimer ?? 'Research only.')}</div>
       </div>
-    </div>` : ''}
-  ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}`;
+    </div>`;
 }
 
 const md = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<b style="color:var(--ink)">$1</b>');
 
-async function doAsk(preset) {
+async function doAsk(preset, presetQuery) {
   S.busy = true; S.error = null; render();
   try {
-    const q = $('q') ? $('q').value : '';
+    const q = presetQuery ?? ($('q') ? $('q').value : '');
     S.answer = await api('/api/ask', { query: q, preset });
+    S.lastQuery = q;
   } catch (e) { S.error = e.message; }
   S.busy = false; render();
+}
+
+async function holdFromAnswer() {
+  const title = (S.lastQuery || 'Saved deal').slice(0, 80);
+  const price = prompt('Price you found (in dollars, numbers only):');
+  if (!price) return;
+  await api('/api/deals/hold', { title, priceCents: Math.round(parseFloat(price)*100),
+    category: S.openDeal ?? 'other', url: '' });
+  await load();
+}
+async function newHunt() {
+  const name = prompt('What are you hunting for?\ne.g. all-inclusive Bahamas');
+  if (!name) return;
+  const ceiling = prompt('Hard ceiling in dollars (never exceeded):');
+  if (!ceiling) return;
+  const traits = prompt('Must-haves, comma separated (optional)\ne.g. nonstop, 4 nights, 2 adults 2 kids') || '';
+  const web = confirm('Search the web?\n\nOK = search the web (needs an API key)\nCancel = watch my own purchases (free)');
+  try {
+    await api('/api/hunts', { name, ceilingCents: Math.round(parseFloat(ceiling)*100),
+      traits: traits.split(',').map(t=>t.trim()).filter(Boolean),
+      source: web ? 'web' : 'history', category: S.openDeal ?? 'other' });
+    await load();
+  } catch (e) { S.error = e.message; render(); }
+}
+async function toggleHunt(id, enabled) { await api('/api/hunts/toggle', { id, enabled }); await load(); }
+async function deleteHunt(id) { if (confirm('Delete this hunt?')) { await api('/api/hunts/delete', { id }); await load(); } }
+async function runHunt(id) {
+  S.busy = true; render();
+  try {
+    const r = await api('/api/hunts/run', { id });
+    S.answer = { label:'Hunt result', answer: r.why ?? r.answer ?? (r.matches.length?`Found ${r.matches.length} match — it's in Spend.`:'No match yet.'),
+                 evidence: r.evidence ?? (r.sources||[]).map(s=>`${s.title||s.url} — ${s.url}`),
+                 steps:[{tool:'hunt.evaluate',detail:'hard ceiling enforced on parsed prices'}],
+                 disclaimer:'Hunts surface candidates. They cannot buy.', ok:false };
+    await load();
+  } catch (e) { S.error = e.message; }
+  S.busy = false; render();
+}
+async function dropDeal(id) { await api('/api/deals/drop', { id }); await load(); }
+async function approveDeal(id) {
+  const a = await api('/api/deals/approve', { id });
+  alert(`${a.item.title}\n\nNow ${(a.item.currentPriceCents/100).toFixed(2)}\n${a.affordability}\n` +
+        (a.monthlyImpactPct ? `That is ${a.monthlyImpactPct}% of a typical month.\n\n` : '\n') +
+        a.handoff.why);
+  if (a.item.url) open(a.item.url, '_blank');
 }
 
 /* ---------------------------------------------------------------- spend */
@@ -258,8 +293,28 @@ function viewSpend() {
   return `
   <div class="top"><h1>Spend</h1><span class="sp"></span>
     <button class="chipbtn" onclick="refresh()">${S.busy?'<span class="spin"></span>':'↻'}</button></div>
-  <div class="tiny muted">Last 30 days · ${sp?.recent.length ?? 0} transactions</div>
+  <div class="tiny muted">What you're about to buy, and what you already do.</div>
 
+  ${(S.watchlist ?? []).length ? `
+  <div class="sec"><span class="lbl">Ready to review</span><span class="act">${S.watchlist.length} queued</span></div>
+  ${S.watchlist.map(w=>{
+    const moved = w.foundPriceCents - w.currentPriceCents;
+    return `<div class="card" style="border-color:var(--spend)">
+      <div class="row" style="align-items:flex-start">
+        <div class="grow"><div style="font-size:13.5px;font-weight:650;line-height:1.4">${esc(w.title)}</div>
+          <div class="tiny muted" style="margin-top:5px">Found at ${$m0(w.foundPriceCents)} · auto-flags at ${$m0(w.targetCents)}</div>
+          ${moved>0?`<div class="tiny ok" style="margin-top:3px">↓ ${$m0(moved)} since you saved it</div>`:''}</div>
+        <div style="text-align:right"><div style="font-weight:700">${$m0(w.currentPriceCents)}</div></div>
+      </div>
+      <div class="row" style="gap:8px;margin-top:10px">
+        <button class="btn go" onclick="approveDeal('${w.id}')">Review &amp; buy</button>
+        <button class="btn ghost" style="width:auto;padding:13px 16px" onclick="dropDeal('${w.id}')">Drop</button>
+      </div>
+    </div>`;}).join('')}
+  <div class="tiny" style="color:var(--dim);margin-top:8px;line-height:1.5">Approving opens the merchant's own checkout — Apple Pay works there and your card never passes through Verafi.</div>
+  ` : `<div class="card"><div class="tiny muted">Nothing queued. Find something in <b style="color:var(--ink)">Shop</b> and hold it — it lands here for review.</div></div>`}
+
+  <div class="sec"><span class="lbl">What you actually spend</span><span class="act">last 30 days</span></div>
   <div class="card"><div class="tiny muted">Total spent</div>
     <div class="big" style="margin-top:4px">${$m0(sp?.totalCents ?? 0)}</div>
     <div class="tiny muted" style="margin-top:6px">Investments, card payments, taxes and transfers excluded — see Pay</div></div>
@@ -321,8 +376,9 @@ function sparkline(months) {
 function viewSave() {
   const sv = S.save;
   return `
-  <div class="top"><h1>Save</h1><span class="sp"></span></div>
-  <div class="tiny muted">Only counts once you've actually done it</div>
+  <div class="top"><h1>Save</h1><span class="sp"></span>
+    <button class="chipbtn" onclick="runAgentsNow()">${S.busy?'<span class="spin"></span>':'↻ recheck'}</button></div>
+  <div class="tiny muted">Purchases worth reviewing, and things worth stopping. Counts only once you've done it.</div>
 
   <div class="card" style="border-color:var(--save)">
     <div class="tiny muted">Confirmed saved</div>
@@ -504,6 +560,13 @@ function viewSettings() {
       </div>
     </div>`).join('')}
 
+  <div class="sec"><span class="lbl">Build</span></div>
+  <div class="card"><div class="row">
+    <span class="tiny muted grow">Running version</span>
+    <span class="badge b-save">${esc(st.version ?? 'unknown')}</span></div>
+    <div class="tiny" style="color:var(--dim);margin-top:8px">If this isn't <b style="color:var(--mut)">v8</b>, the server is still on old code and the deploy didn't take.</div>
+  </div>
+
   <div class="sec"><span class="lbl">Danger</span></div>
   <div class="card"><button class="btn ghost" style="color:var(--dang)" onclick="wipe()">Erase everything and start over</button></div>
   ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}`;
@@ -584,6 +647,14 @@ function toggleTheme() {
 /* ---------------------------------------------------------------- render */
 function render() {
   const st = S.state;
+  if (S.staleServer && st) {
+    const banner = `<div class="card" style="border-color:var(--warn);margin-bottom:4px">
+      <div class="tiny" style="line-height:1.6"><b style="color:var(--warn)">Server is out of date.</b>
+      ${S.staleServer.length} endpoint(s) missing: ${S.staleServer.map(esc).join(', ')}.
+      The app files updated but the server didn't — redeploy and restart it.
+      Running version: <b style="color:var(--ink)">${esc(st.version ?? 'pre-v8')}</b></div></div>`;
+    setTimeout(()=>{ const a=$('app'); if(a && !a.innerHTML.includes('Server is out of date')) a.insertAdjacentHTML('afterbegin', banner); }, 0);
+  }
   $('app').innerHTML = S.locked ? viewLock()
     : !st ? '<div class="empty"><span class="spin"></span></div>'
     : !st.linked ? viewOnboard()
@@ -591,11 +662,11 @@ function render() {
     : S.tab === 'settings' ? viewSettings()
     : S.tab === 'wallet' ? viewWallet()
     : S.tab === 'agent' ? viewAgent()
-    : S.tab === 'save' ? viewSave() : viewAsk();
+    : S.tab === 'save' ? viewSave() : viewShop();
 
   if (S.locked) { $('tabs').innerHTML = ''; setTimeout(()=>$('pc')?.focus(), 60); return; }
   $('tabs').innerHTML = !st?.linked ? '' :
-    [['ask','Ask'],['spend','Spend'],['save','Save'],['wallet','Pay'],['agent','Agents']].map(([k,l])=>
+    [['ask','Shop'],['spend','Spend'],['save','Save'],['wallet','Pay'],['agent','Agents']].map(([k,l])=>
       `<button class="${S.tab===k?'on':''}" onclick="S.tab='${k}';render();scrollTo(0,0)">
          <svg viewBox="0 0 24 24">${ICONS[k]}</svg>${l}</button>`).join('');
 

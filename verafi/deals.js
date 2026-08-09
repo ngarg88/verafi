@@ -39,9 +39,113 @@ export const COST = Object.freeze({
 const DAY = 86400000;
 const f0 = c => '$' + Math.round(c/100).toLocaleString('en-US');
 
+/**
+ * DEAL CATEGORIES, DERIVED FROM WHAT YOU ACTUALLY BUY
+ *
+ * Generic "browse deals" is a coupon site. The point of sitting on top of a bank feed is
+ * that the questions can be specific to this person: they fly twice a year, they spend
+ * $400/month on dining, they buy running shoes every eight months. Presets are generated
+ * from that, not from a static list.
+ */
+export const DEAL_CATEGORIES = {
+  travel:        { icon:'✈️', label:'Travel',        match:/travel|flights|hotels/,
+                   asks: (c)=>[`Best value trip under $${c.budget} for my family`,
+                               `Cheapest nonstop flights for a long weekend under $${Math.round(c.budget/3)}`,
+                               `All-inclusive resorts under $${c.budget} for 4 people`] },
+  entertainment: { icon:'🎟️', label:'Entertainment', match:/entertainment|events|cinema/,
+                   asks: (c)=>[`Concerts and shows near me under $${c.budget}`,
+                               `Best value family activities this month`] },
+  clothing:      { icon:'👕', label:'Clothing',      match:/clothing|shopping/,
+                   asks: (c)=>[`Current sales at the brands I actually buy`,
+                               `Best price on running shoes under $${c.budget}`] },
+  watches:       { icon:'⌚', label:'Watches & jewellery', match:/jewel|watch/,
+                   asks: (c)=>[`Best value watches under $${c.budget}`,
+                               `Where to buy pre-owned safely under $${c.budget}`] },
+  electronics:   { icon:'💻', label:'Electronics',   match:/electronics/,
+                   asks: (c)=>[`Best laptop under $${c.budget} right now`,
+                               `Is now a good time to buy, or is a new model due?`] },
+  home:          { icon:'🛋️', label:'Home',          match:/home|furniture/,
+                   asks: (c)=>[`Best value furniture sales under $${c.budget}`] },
+  dining:        { icon:'🍽️', label:'Dining',        match:/dining/,
+                   asks: ()=>[`Restaurant deals and prix-fixe menus near me`,
+                              `Which delivery service is cheapest for my usual orders?`] }
+};
+
+/**
+ * Build the deal surface for THIS user: their biggest categories first, with budgets
+ * anchored to what they have actually spent rather than numbers we invented.
+ */
+export function dealPresets(tx, now = Date.now()) {
+  const ex = expensesOnly(tx);
+  const yr = ex.filter(t => t.postedAt > now - 365*DAY && t.amountCents > 0);
+  const byCat = {};
+  for (const t of yr) byCat[t.category] = (byCat[t.category] ?? 0) + t.amountCents;
+
+  const out = [];
+  for (const [key, def] of Object.entries(DEAL_CATEGORIES)) {
+    const spent = Object.entries(byCat)
+      .filter(([c]) => def.match.test(c)).reduce((a,[,v])=>a+v,0);
+    const largest = Math.max(0, ...yr.filter(t => def.match.test(t.category)).map(t=>t.amountCents));
+    // budget anchor: their biggest single purchase in the category, else a twelfth of the year
+    const budget = Math.round((largest || spent/12) / 100) || 250;
+    out.push({
+      key, icon: def.icon, label: def.label,
+      spentYearCents: spent,
+      basis: spent ? `You spent $${Math.round(spent/100).toLocaleString()} here in the last year`
+                   : 'No spending here yet — budget is a starting guess',
+      budget,
+      asks: def.asks({ budget })
+    });
+  }
+  return out.sort((a,b) => b.spentYearCents - a.spentYearCents);
+}
+
 /** Does this read like "find me something to buy" rather than "analyse my spending"? */
 export function isDealQuery(q) {
-  return /\b(find|best|deal|cheap|book|trip|vacation|holiday|flight|hotel|resort|all.?inclusive|buy|shop|looking for|recommend|compare)\b/i.test(q ?? '');
+  return /\b(find|best|deal|cheap|book|trip|vacation|holiday|flight|hotel|resort|all.?inclusive|buy|shop|looking for|recommend|compare|sale|price|worth it|under \$)\b/i.test(q ?? '');
+}
+
+/**
+ * HOLDING A DEAL
+ *
+ * We cannot take your money — no agent payment rails for a personal account. What we can
+ * honestly do is: pin the option, keep checking the price, tell you when it moves, and
+ * hand you a link to the merchant's own checkout where Apple Pay already works.
+ *
+ * That is the whole flow minus the part that needs a business entity, and it is the part
+ * that actually saves money anyway.
+ */
+export function holdDeal({ store, title, url, priceCents, targetCents, category, notes }) {
+  const D = store.data;
+  D.watchlist ??= [];
+  const item = {
+    id: 'hold_' + Math.random().toString(36).slice(2,9),
+    title, url, category,
+    foundPriceCents: priceCents, targetCents: targetCents ?? Math.round(priceCents * 0.9),
+    currentPriceCents: priceCents, notes: notes ?? null,
+    status: 'watching', createdAt: Date.now(), lastCheckedAt: Date.now(), history: [{ at: Date.now(), priceCents }]
+  };
+  D.watchlist.unshift(item);
+  store.save();
+  return item;
+}
+
+/** What the approval sheet shows before handing off. No charge happens here. */
+export function approvalSummary(item, tx) {
+  const ctx = spendingContext(tx);
+  const drop = item.foundPriceCents - item.currentPriceCents;
+  return {
+    item,
+    priceMovedCents: drop,
+    affordability: ctx.summary,
+    monthlyImpactPct: ctx.monthlySpendCents
+      ? +(item.currentPriceCents / ctx.monthlySpendCents * 100).toFixed(1) : null,
+    handoff: {
+      method: 'merchant_checkout',
+      url: item.url,
+      why: 'Verafi cannot charge your card. This opens the merchant\'s own checkout, where Apple Pay works normally and your card details never pass through us.'
+    }
+  };
 }
 
 /** What we know about this user, so the answer is theirs and not generic. */

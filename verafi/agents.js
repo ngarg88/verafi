@@ -36,6 +36,9 @@ const NOT_A_MEMBERSHIP = /amazon|whole ?foods|trader ?joe|safeway|kroger|costco|
 /** Categories where a recurring identical charge is expected, not a duplicate. */
 const EXPECTED_RECURRING = /rent|mortgage|payroll|insurance|utility|comcast|xfinity|verizon|at&t|t-mobile|loan|tuition/i;
 
+/** Belt and braces: even if the flow classifier misses one, agents skip these. */
+const INVESTMENT_ISH = /fid ?bkg|fidelity|vanguard|schwab|robinhood|etrade|e\*trade|merrill|betterment|wealthfront|acorns|coinbase|brokerage|trump ?account|401k|\bira\b|529|invest/i;
+
 const FEE_RE = /\bfee\b|overdraft|nsf\b|surcharge|service charge|late payment|maintenance|interest charge/i;
 
 export const AGENTS = {
@@ -59,7 +62,12 @@ export const AGENTS = {
     run({ tx }) {
       // Every fee in the whole history, itemised. An aggregate number you can't act on
       // is worthless - you need the date and the merchant to call and dispute it.
-      const fees = tx.filter(t => t.isFee || FEE_RE.test(t.merchantName ?? t.merchantId ?? ''));
+      // Only fees a bank would actually reverse. A $1.99 booking fee from a ticketing
+      // site is a price, not a mistake, and telling someone to call about it is noise.
+      const NOT_DISPUTABLE = /booking|convenience|processing|delivery|service charge from|ticket|resort fee|baggage/i;
+      const fees = tx.filter(t => (t.isFee || FEE_RE.test(t.merchantName ?? t.merchantId ?? ''))
+                               && !NOT_DISPUTABLE.test(t.merchantName ?? t.merchantId ?? '')
+                               && t.amountCents >= 500);
       return fees.map(t => {
         const kind = /overdraft|nsf|insufficient/i.test(t.merchantName ?? '') ? 'overdraft'
                    : /atm|surcharge/i.test(t.merchantName ?? '')             ? 'ATM'
@@ -222,8 +230,18 @@ export const AGENTS = {
       // Groceries, coffee, rideshare and delivery are places you legitimately hit twice
       // in a day. Duplicate detection there is pure noise, so it is switched off for them.
       const HIGH_FREQUENCY = new Set(['grocery','dining','transport','retail','entertainment']);
+      // Anything that charges the SAME amount on a schedule is a plan, not a mistake:
+      // brokerage contributions, insurance, memberships. Flagging those as fraud is the
+      // fastest way to make someone stop trusting the app.
+      const byMerchantAll = {};
+      for (const t of tx) (byMerchantAll[t.merchantId] ??= []).push(t);
+      const scheduled = new Set(Object.entries(byMerchantAll)
+        .filter(([, list]) => isFixedRecurring(list)).map(([m]) => m));
+
       const recent = tx.filter(t => t.postedAt > since && t.amountCents > 1000
                                  && !HIGH_FREQUENCY.has(t.category)
+                                 && !scheduled.has(t.merchantId)
+                                 && !INVESTMENT_ISH.test(t.merchantName ?? t.merchantId ?? '')
                                  && !EXPECTED_RECURRING.test(t.merchantName ?? t.merchantId ?? '')
                                  && (visitsPerMonth[t.merchantId] ?? 0) <= 2);
       const out = [], seen = new Set();

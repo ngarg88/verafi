@@ -58,6 +58,9 @@ export function categorise(description) {
 
 export function normaliseMerchant(description) {
   return String(description)
+    // some exports jam the date into the description: "2026-08-05: VETSOURCE in"
+    .replace(/^\s*\d{4}-\d{2}-\d{2}\s*[:\-]?\s*/, '')
+    .replace(/^\s*\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*[:\-]?\s*/, '')
     .replace(/\b(sq|tst|pos|purchase|debit card|pp|paypal|sp|amzn mktp|www\.)\b/gi, ' ')
     .replace(/\b\d{3,}\b/g, ' ').replace(/[^a-zA-Z0-9 ]+/g, ' ')
     .trim().toLowerCase().split(/\s+/).slice(0, 3).join('-') || 'unknown';
@@ -81,7 +84,9 @@ export function importCsv(text, { instrumentId = null, source = 'csv' } = {}) {
     const dateStr = (r[iDate] ?? '').trim();
     const posted = Date.parse(dateStr);
     if (!dateStr || Number.isNaN(posted)) continue;
-    const desc = (r[iDesc] ?? '').trim();
+    let desc = (r[iDesc] ?? '').trim()
+      .replace(/^\s*\d{4}-\d{2}-\d{2}\s*[:\-]?\s*/, '')
+      .replace(/^\s*\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*[:\-]?\s*/, '');
 
     let cents;
     if (iAmt >= 0 && (r[iAmt] ?? '').trim()) {
