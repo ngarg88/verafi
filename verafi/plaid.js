@@ -14,10 +14,18 @@ export class Plaid {
     Object.assign(this, { clientId, secret, host: HOSTS[env] ?? HOSTS.sandbox, env });
   }
   async call(path, body = {}) {
-    const r = await fetch(this.host + path, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ client_id: this.clientId, secret: this.secret, ...body })
-    });
+    // Plaid is usually fast but occasionally is not. A slow sync must not wedge a request.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), Number(process.env.PLAID_TIMEOUT_MS ?? 30000));
+    let r;
+    try {
+      r = await fetch(this.host + path, {
+        method: 'POST', signal: ctrl.signal, headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ client_id: this.clientId, secret: this.secret, ...body })
+      });
+    } catch (e) {
+      throw new Error(e.name === 'AbortError' ? `plaid ${path} timed out` : `plaid ${path}: ${e.message}`);
+    } finally { clearTimeout(timer); }
     const j = await r.json();
     if (!r.ok) throw new Error(`plaid ${path} ${r.status}: ${j.error_code ?? ''} ${j.error_message ?? ''}`);
     return j;

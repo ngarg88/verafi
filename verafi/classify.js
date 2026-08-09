@@ -44,6 +44,9 @@ const RULES = [
  * because wrongly EXCLUDING real spend hides money, and wrongly INCLUDING a 401k is
  * insulting. Neither is free, so we surface the uncertainty instead of hiding it.
  */
+/** A fee charged BY your bank is an expense you can dispute, not a payment TO it. */
+const IS_A_FEE = /\bfee\b|overdraft|nsf\b|surcharge|service charge|interest charge|late payment/i;
+
 export function classify(tx, learnedFlow = null) {
   if (learnedFlow) {
     const n = `${tx.merchantName ?? ''} ${tx.merchantId ?? ''}`.toLowerCase();
@@ -53,6 +56,9 @@ export function classify(tx, learnedFlow = null) {
   const text = `${tx.merchantName ?? ''} ${tx.merchantId ?? ''} ${tx.category ?? ''}`;
 
   if (tx.amountCents < 0) return { flow: FLOW.INCOME, confidence: 0.95, why: 'money in' };
+
+  // Checked before the issuer rules, or "CHASE OVERDRAFT FEE" reads as paying Chase.
+  if (IS_A_FEE.test(text)) return { flow: FLOW.EXPENSE, confidence: 0.9, why: 'a fee charged to you' };
 
   for (const [flow, re] of RULES) {
     const m = text.match(re);

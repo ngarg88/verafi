@@ -388,6 +388,8 @@ const ROUTES = {
 
   'POST /api/findings/dismiss': async (b) => {
     D.findings = (D.findings ?? []).filter(f => `${f.agent}:${f.ref}` !== b.key);
+    // Remember the dismissal, or the same finding returns on the next agent run.
+    D.dismissed ??= {}; D.dismissed[b.key] = Date.now();
     store.save(); return { ok:true };
   },
 
@@ -513,18 +515,28 @@ const ROUTES = {
   },
 
   /** The reasoning pass over findings: what matters, why, and what to do. */
+  /**
+   * Reasoning is never on the critical path. This returns instantly with whatever is
+   * cached and kicks off a refresh in the background. A slow model call can no longer
+   * make the whole app appear dead - which is exactly what it just did.
+   */
   'GET /api/insight': async () => {
     const { all } = runAgents({ store, cardRules: CARD_RULES });
     if (!hasLLM()) return { ok:false, reason:'no_api_key', findings: all.length,
       note:'Findings are computed. Add an API key and the agent will tell you which ones matter and why.' };
-    const ctx = spendingContext(store.tx()).summary;
-    const cached = meterNow().cache['insight:' + all.length + ':' + (all[0]?.ref ?? '')];
+    const key = 'insight:' + all.length + ':' + (all[0]?.ref ?? '');
+    const m = meterNow();
+    const cached = m.cache[key];
     if (cached && Date.now() - cached.at < 6*3600_000) return { ok:true, ...cached.v, cached:true };
-    const out = await interpretFindings({ findings: all, context: ctx, meter: meterNow() });
-    if (!out.ok) return { ok:false, reason: out.reason };
-    meterNow().cache['insight:' + all.length + ':' + (all[0]?.ref ?? '')] = { at: Date.now(), v: out };
-    store.save();
-    return { ok:true, ...out, spentThisMonth: meterNow().monthUsd };
+
+    if (!m.inflight) {                       // fire and forget, one at a time
+      m.inflight = true;
+      interpretFindings({ findings: all, context: spendingContext(store.tx()).summary, meter: m })
+        .then(out => { if (out.ok) { m.cache[key] = { at: Date.now(), v: out }; store.save(); } })
+        .catch(()=>{})
+        .finally(() => { m.inflight = false; });
+    }
+    return { ok:false, reason:'thinking', note:'The agent is reading your findings. Refresh in a moment.' };
   },
 
   /** A specific read on the month. */
@@ -607,7 +619,11 @@ const server = http.createServer(async (req, res) => {
  * stay up, and one dependency-free timer is easier to reason about than a scheduler.
  */
 const EVERY = +(process.env.AGENT_INTERVAL_HOURS ?? 24) * 3600_000;
+let scheduledRunning = false;
 async function scheduled() {
+  // A slow sync must not stack up behind itself.
+  if (scheduledRunning) { console.log('scheduled run already in progress, skipping'); return; }
+  scheduledRunning = true;
   try {
     if (plaid && D.connections.length) {
       for (const c of D.connections) {
@@ -637,6 +653,7 @@ async function scheduled() {
       url: process.env.PUBLIC_URL });
     console.log(`[${new Date().toISOString()}] agents ran · ${fresh.length} new findings`);
   } catch (e) { console.error('scheduled run failed:', e.message); }
+  finally { scheduledRunning = false; }
 }
 setInterval(scheduled, EVERY);
 setTimeout(scheduled, 15_000);                       // once shortly after boot

@@ -220,16 +220,27 @@ What we know about this user's finances: ${ctx.summary}.`;
     messages: [{ role: 'user', content: query }]
   };
 
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type':'application/json', 'x-api-key': apiKey, 'anthropic-version':'2023-06-01' },
-    body: JSON.stringify(body)
-  });
-  if (!r.ok) {
-    const text = await r.text();
-    return { ok:false, answer:`Research call failed (${r.status}). ${text.slice(0,200)}`, context: ctx };
-  }
-  const j = await r.json();
+  // Same hard timeout as every other model call. A slow search must not hang the app.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Number(process.env.LLM_TIMEOUT_MS ?? 25000));
+  let r, j;
+  try {
+    r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', signal: ctrl.signal,
+      headers: { 'content-type':'application/json', 'x-api-key': apiKey, 'anthropic-version':'2023-06-01' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      return { ok:false, answer:`Research call failed (${r.status}). ${text.slice(0,200)}`, context: ctx };
+    }
+    j = await r.json();
+  } catch (e) {
+    return { ok:false, context: ctx,
+      answer: e.name === 'AbortError'
+        ? 'The search took too long and was stopped. Web research with sources can take a while — try a narrower question, or try again.'
+        : `Could not reach the research service (${e.message}).` };
+  } finally { clearTimeout(timer); }
   const answer = (j.content ?? []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
   // Real usage, not an estimate — so the cost number shown to the user is the true one.
   const searches = (j.content ?? []).filter(c => c.type === 'web_search_tool_result').length;

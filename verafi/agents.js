@@ -31,7 +31,14 @@ function isFixedRecurring(list) {
 }
 
 /** Merchants where "you stopped going" means nothing — you just shop elsewhere. */
-const NOT_A_MEMBERSHIP = /amazon|whole ?foods|trader ?joe|safeway|kroger|costco|target|walmart|shell|chevron|exxon|uber|lyft|doordash|grubhub|starbucks|cvs|walgreens|amzn/i;
+const NOT_A_MEMBERSHIP_RE = /amazon|whole ?foods|trader ?joe|safeway|kroger|publix|wegmans|albertsons|costco|target|walmart|shell|chevron|exxon|mobil|uber|lyft|doordash|grubhub|instacart|starbucks|dunkin|cvs|walgreens|amzn|7.?eleven|wawa/i;
+
+/**
+ * Merchant ids arrive slugified ("whole-foods-mkt"), so a regex written with spaces
+ * silently fails to match. Normalise separators before testing - this exact mismatch
+ * let "you stopped shopping at Whole Foods" through as a $1,498/yr "saving".
+ */
+const NOT_A_MEMBERSHIP = { test: (x) => NOT_A_MEMBERSHIP_RE.test(String(x ?? '').replace(/[-_]+/g, ' ')) };
 
 /** Categories where a recurring identical charge is expected, not a duplicate. */
 const EXPECTED_RECURRING = /rent|mortgage|payroll|insurance|utility|comcast|xfinity|verizon|at&t|t-mobile|loan|tuition/i;
@@ -47,7 +54,9 @@ export const AGENTS = {
     surface: 'save', label: 'Subscription Auditor',
     run({ tx, now }) {
       const s = deriveSignals(tx, now);
-      return s.dormantSubscriptions.map(d => ({
+      // Shopping somewhere on a regular cadence is a habit, not a subscription. Cancelling
+      // a grocery store is not a thing, and claiming $1,498/yr for it destroys trust.
+      return s.dormantSubscriptions.filter(d => !NOT_A_MEMBERSHIP.test(d.merchantId)).map(d => ({
         agent: 'subscription_auditor', ref: d.merchantId,
         title: `${pretty(d.merchantId)} is still billing you`,
         detail: `$${(d.amountCents/100).toFixed(2)} every ~${Math.round(d.cadenceDays)} days, but the last charge was ${Math.round(d.daysSinceLast)} days ago and you haven't used it since.`,
@@ -105,6 +114,8 @@ export const AGENTS = {
       const out = [];
       for (const [m, list] of Object.entries(byMerchant)) {
         if (list.length < 4) continue;
+        // Groceries, fuel and general retail: spend moves because the basket moves.
+        if (NOT_A_MEMBERSHIP.test(m)) continue;
         // A grocery bill going from $62 to $103 is a bigger basket, not a price rise.
         // Only flag charges that are supposed to be the same number every time.
         const s0 = list.slice().sort((a,b)=>a.postedAt-b.postedAt);
@@ -349,7 +360,7 @@ export function runAgents({ store, now = Date.now(), lookbackDays = 45, cardRule
   const tx = expensesOnly(D.transactions);
   const since = now - lookbackDays * DAY;
   const enabled = new Set(D.agents.filter(a => a.enabled).map(a => a.name));
-  D.seenFindings ??= {};
+  D.seenFindings ??= {}; D.dismissed ??= {};
 
   const all = [], fresh = [];
   for (const [id, agent] of Object.entries(AGENTS)) {
@@ -358,6 +369,7 @@ export function runAgents({ store, now = Date.now(), lookbackDays = 45, cardRule
     try { found = agent.run({ tx, now, since, cardRules, instruments: D.instruments }) ?? []; }
     catch (e) { found = []; console.error(`agent ${id} failed:`, e.message); }
     for (const f of found) {
+      if (D.dismissed[key(f)]) continue;      // you said no; we do not ask again
       all.push(f);
       if (!D.seenFindings[key(f)]) { D.seenFindings[key(f)] = now; fresh.push(f); }
     }

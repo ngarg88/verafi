@@ -27,9 +27,13 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
   const cap = Number(process.env.RESEARCH_MONTHLY_CAP_USD ?? 5);
   if (meter && meter.monthUsd >= cap) return { ok: false, reason: 'monthly_cap_reached', spent: meter.monthUsd };
 
+  // A model call must NEVER be able to wedge the app. Hard timeout, always.
+  const ctrl = new AbortController();
+  const timeoutMs = Number(process.env.LLM_TIMEOUT_MS ?? 20000);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const r = await fetch(API, {
-      method: 'POST',
+      method: 'POST', signal: ctrl.signal,
       headers: { 'content-type':'application/json', 'x-api-key': key, 'anthropic-version':'2023-06-01' },
       body: JSON.stringify({
         model: MODEL, max_tokens: maxTokens, system,
@@ -46,7 +50,9 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
     const cost = (j.usage?.input_tokens ?? 0)/1e6*3 + (j.usage?.output_tokens ?? 0)/1e6*15;
     if (meter) { meter.monthUsd = +((meter.monthUsd ?? 0) + cost).toFixed(4); meter.calls = (meter.calls ?? 0) + 1; }
     return { ok:true, text, costUsd:+cost.toFixed(5) };
-  } catch (e) { return { ok:false, reason:'network', detail:e.message }; }
+  } catch (e) {
+    return { ok:false, reason: e.name === 'AbortError' ? 'timeout' : 'network', detail:e.message };
+  } finally { clearTimeout(timer); }
 }
 
 /**

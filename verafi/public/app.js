@@ -215,13 +215,22 @@ function answerCard(r) {
 const md = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<b style="color:var(--ink)">$1</b>');
 
 async function doAsk(preset, presetQuery) {
-  S.busy = true; S.error = null; render();
+  const q = presetQuery ?? ($('q') ? $('q').value : '');
+  if (!q && !preset) { S.error = 'Type what you are looking for first.'; render(); return; }
+  S.busy = true; S.error = null; S.answer = null; S.lastQuery = q; render();
+  // Never let a hung request look like a dead button.
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 30000);
   try {
-    const q = presetQuery ?? ($('q') ? $('q').value : '');
-    S.answer = await api('/api/ask', { query: q, preset });
-    S.lastQuery = q;
-  } catch (e) { S.error = e.message; }
-  S.busy = false; render();
+    const r = await fetch('/api/ask', { method:'POST', signal: ctrl.signal,
+      headers:{'content-type':'application/json'}, body: JSON.stringify({ query: q, preset }) });
+    if (!r.ok) throw new Error('Server returned ' + r.status);
+    S.answer = await r.json();
+  } catch (e) {
+    S.error = e.name === 'AbortError'
+      ? 'That took over 30 seconds and was stopped. The server may be busy — try again.'
+      : e.message;
+  } finally { clearTimeout(t); S.busy = false; render(); }
 }
 
 async function holdFromAnswer() {
