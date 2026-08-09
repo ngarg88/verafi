@@ -22,6 +22,14 @@ import { VERSION, BUILT, FEATURES } from './version.js';
 import { RESEARCH, ask as askResearch } from './research.js';
 import { isDealQuery, researchDeal, spendingContext, COST, dealPresets, holdDeal, approvalSummary } from './deals.js';
 import { makeRule, describe as describeRule, runRule, dueRules, SOURCE } from './rules.js';
+import { hasLLM, categoriseMerchants, interpretFindings, monthlyNarrative } from './llm.js';
+
+/** Per-month meter shared by every model call, so one cap covers the whole app. */
+function meterNow() {
+  const m = new Date().toISOString().slice(0,7);
+  D.meter ??= {}; D.meter[m] ??= { monthUsd: 0, calls: 0, cache: {} };
+  return D.meter[m];
+}
 
 /**
  * Seed the full agent catalog so you can enable any of them, not just the ones your
@@ -151,6 +159,7 @@ const ROUTES = {
     const signals = tx.length ? deriveSignals(tx) : null;
     return {
       plaidConfigured: !!plaid, plaidEnv: process.env.PLAID_ENV ?? 'sandbox', version: VERSION,
+      llm: hasLLM(), llmSpentUsd: (D.meter?.[new Date().toISOString().slice(0,7)]?.monthUsd) ?? 0,
       authRequired: authRequired(), findings: D.findings ?? [],
       linked: !!D.profile.linkedAt, transactions: tx.length,
       connections: D.connections.map(c => ({ id:c.id, institution:c.institution, accounts:c.accounts, linkedAt:c.linkedAt })),
@@ -482,6 +491,55 @@ const ROUTES = {
   }),
 
   /** Teach it. Your answer beats our rules, permanently. */
+  /** Let the model classify everything our rules could not place. Cached forever. */
+  'POST /api/autocategorise': async () => {
+    if (!hasLLM()) return { status:400, ok:false,
+      error:'Needs ANTHROPIC_API_KEY. Add it to /etc/verafi.env and restart.' };
+    const unknowns = unknownMerchants(expensesOnly(store.tx()), 40);
+    if (!unknowns.length) return { ok:true, learned:0, note:'nothing left uncategorised' };
+    const tax = Object.entries(TAXONOMY).map(([k,v]) => ({ key:k, subs:v.subs }));
+    const run = store.startRun('autocategorise');
+    const out = await categoriseMerchants({ merchants: unknowns, taxonomy: tax, meter: meterNow() });
+    if (!out.ok) { store.finishRun(run,'failed'); return { ok:false, error: out.reason, detail: out.detail }; }
+    D.learned ??= {}; D.learnedFlow ??= {};
+    for (const [merchant, v] of Object.entries(out.map)) {
+      D.learned[merchant] = { category:v.category, subcategory:v.subcategory };
+      if (v.flow && v.flow !== 'expense') D.learnedFlow[merchant] = v.flow;
+    }
+    D.findings = []; D.seenFindings = {};
+    store.step(run, 'llm.categorise', { merchants: unknowns.length }, { learned: out.count, costUsd: out.costUsd });
+    store.finishRun(run); store.save();
+    return { ok:true, learned: out.count, costUsd: out.costUsd, spentThisMonth: meterNow().monthUsd };
+  },
+
+  /** The reasoning pass over findings: what matters, why, and what to do. */
+  'GET /api/insight': async () => {
+    const { all } = runAgents({ store, cardRules: CARD_RULES });
+    if (!hasLLM()) return { ok:false, reason:'no_api_key', findings: all.length,
+      note:'Findings are computed. Add an API key and the agent will tell you which ones matter and why.' };
+    const ctx = spendingContext(store.tx()).summary;
+    const cached = meterNow().cache['insight:' + all.length + ':' + (all[0]?.ref ?? '')];
+    if (cached && Date.now() - cached.at < 6*3600_000) return { ok:true, ...cached.v, cached:true };
+    const out = await interpretFindings({ findings: all, context: ctx, meter: meterNow() });
+    if (!out.ok) return { ok:false, reason: out.reason };
+    meterNow().cache['insight:' + all.length + ':' + (all[0]?.ref ?? '')] = { at: Date.now(), v: out };
+    store.save();
+    return { ok:true, ...out, spentThisMonth: meterNow().monthUsd };
+  },
+
+  /** A specific read on the month. */
+  'GET /api/narrative': async () => {
+    if (!hasLLM()) return { ok:false, reason:'no_api_key' };
+    const tx = expensesOnly(store.tx());
+    const cats = categoriseAll(tx, D.learned).slice(0,8)
+      .map(c=>`${c.label} $${Math.round(c.cents/100)} (${c.share}%)`).join(', ');
+    const { all } = runAgents({ store, cardRules: CARD_RULES });
+    const out = await monthlyNarrative({ context: spendingContext(store.tx()).summary,
+      categories: cats, findings: all.slice(0,5).map(f=>f.title).join('; '), meter: meterNow() });
+    store.save();
+    return out;
+  },
+
   'POST /api/teach': async (b) => {
     if (!b.merchant || !b.category) return { status:422, error:'need a merchant and a category' };
     D.learned ??= {};

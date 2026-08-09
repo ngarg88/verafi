@@ -281,6 +281,8 @@ export const AGENTS = {
       }
       const out = [];
       for (const [cat, spent] of Object.entries(thisMonth)) {
+        // "Other is running hot" tells you nothing actionable. Skip the catch-all.
+        if (cat === 'other' || !cat) continue;
         const monthlyNormal = (prior[cat] ?? 0) / 3;
         if (monthlyNormal < 5000) continue;               // ignore trivial categories
         const projected = spent / elapsed;

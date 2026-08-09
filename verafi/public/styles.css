@@ -57,3 +57,9 @@ input,select{background:var(--card2);border:1px solid var(--line);border-radius:
 input::placeholder{color:var(--dim)}
 .spin{display:inline-block;width:11px;height:11px;border:2px solid var(--line);border-top-color:var(--save);border-radius:50%;animation:s .7s linear infinite}
 @keyframes s{to{transform:rotate(360deg)}}
+
+/* ---- brand ---- */
+.brand{display:flex;align-items:center;gap:9px;padding:2px 0 10px}
+.wordmark{font-family:var(--serif);font-size:19px;font-weight:600;letter-spacing:-.3px;color:var(--ink)}
+.brandsub{font-size:9.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim);font-weight:700;
+  border:1px solid var(--line);padding:3px 7px;border-radius:5px;margin-left:2px}

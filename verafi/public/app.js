@@ -1,4 +1,16 @@
 const $ = (id) => document.getElementById(id);
+
+/** The mark: a V that reads as a checkmark. Verified finance. */
+const MARK = (size=22) => `<svg viewBox="0 0 192 192" style="width:${size}px;height:${size}px;flex:0 0 auto">
+  <defs><linearGradient id="vg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#8B7CF6"/><stop offset="100%" stop-color="#34E1A6"/></linearGradient></defs>
+  <rect width="192" height="192" rx="44" fill="#161923"/>
+  <path d="M52 74 L86 128 L140 52" fill="none" stroke="url(#vg)" stroke-width="17"
+        stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+const BRAND = (sub) => `<div class="brand">
+  ${MARK(24)}<span class="wordmark">Verafi</span>
+  ${sub ? `<span class="brandsub">${sub}</span>` : ''}</div>`;
 const api = async (p, body) => {
   const r = await fetch(p, body ? { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body) } : {});
   const j = await r.json();
@@ -10,7 +22,7 @@ const $m0 = (c) => (c/100).toLocaleString('en-US',{style:'currency',currency:'US
 const esc = (s) => String(s ?? '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 const title = (s) => String(s ?? '').replace(/[-_]/g,' ').replace(/\b\w/g, m => m.toUpperCase());
 
-const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, unknowns:null, taxonomy:null, lastQuery:null, spend:null, save:null, forecast:null, busy:false, error:null };
+const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, unknowns:null, taxonomy:null, insight:null, lastQuery:null, spend:null, save:null, forecast:null, busy:false, error:null };
 
 const ICONS = {
   ask:'<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
@@ -26,11 +38,11 @@ async function load() {
   if (S.state.linked) {
     // One missing endpoint must never blank the whole app. Each call fails on its own.
     const safe = (p) => api(p).catch(e => ({ __failed: p, __error: e.message }));
-    const [sp, sv, fc, cd, rs, dc, wl, hu, un] = await Promise.all([
+    const [sp, sv, fc, cd, rs, dc, wl, hu, un, ins] = await Promise.all([
       safe('/api/spend?days=30'), safe('/api/save'), safe('/api/forecast'),
-      safe('/api/cards'), safe('/api/research'), safe('/api/deals/presets'), safe('/api/deals/watchlist'), safe('/api/hunts'), safe('/api/unknowns')
+      safe('/api/cards'), safe('/api/research'), safe('/api/deals/presets'), safe('/api/deals/watchlist'), safe('/api/hunts'), safe('/api/unknowns'), safe('/api/insight')
     ]);
-    const failed = [sp,sv,fc,cd,rs,dc,wl,hu,un].filter(x => x?.__failed).map(x => x.__failed);
+    const failed = [sp,sv,fc,cd,rs,dc,wl,hu,un,ins].filter(x => x?.__failed).map(x => x.__failed);
     Object.assign(S, {
       spend: sp.__failed ? null : sp, save: sv.__failed ? null : sv,
       forecast: fc.__failed ? null : fc, cards: cd.__failed ? null : cd,
@@ -40,6 +52,7 @@ async function load() {
       hunts: hu?.__failed ? [] : hu.hunts,
       unknowns: un?.__failed ? [] : un.unknowns,
       taxonomy: un?.__failed ? [] : un.taxonomy,
+      insight: ins?.__failed ? null : ins,
       staleServer: failed.length ? failed : null
     });
   }
@@ -49,7 +62,8 @@ async function load() {
 /* ---------------------------------------------------------------- lock */
 function viewLock() {
   return `
-  <div style="padding-top:22vh;text-align:center">
+  <div style="padding-top:20vh;text-align:center">
+    <div style="display:flex;justify-content:center;margin-bottom:14px">${MARK(54)}</div>
     <h1>Verafi</h1>
     <p class="tiny muted" style="margin-top:8px">Enter your passcode</p>
     <div style="max-width:240px;margin:18px auto 0">
@@ -127,6 +141,7 @@ function viewShop() {
   }
 
   return `
+  ${BRAND()}
   <div class="top"><h1>Shop</h1><span class="sp"></span>
     <button class="chipbtn" onclick="S.tab='settings';render()">⚙</button></div>
   <div class="tiny muted">Agents that find things worth buying — priced against what you actually spend.</div>
@@ -293,6 +308,7 @@ function viewCategoryDetail(open) {
 function viewSpend() {
   const sp = S.spend;
   return `
+  ${BRAND()}
   <div class="top"><h1>Spend</h1><span class="sp"></span>
     <button class="chipbtn" onclick="refresh()">${S.busy?'<span class="spin"></span>':'↻'}</button></div>
   <div class="tiny muted">What you're about to buy, and what you already do.</div>
@@ -351,6 +367,7 @@ function viewSave() {
   const open = S.openCat;
   if (open) return viewCategoryDetail(open);
   return `
+  ${BRAND()}
   <div class="top"><h1>Save</h1><span class="sp"></span>
     <button class="chipbtn" onclick="runAgentsNow()">${S.busy?'<span class="spin"></span>':'↻ recheck'}</button></div>
   <div class="tiny muted">Purchases worth reviewing, and things worth stopping. Counts only once you've done it.</div>
@@ -383,10 +400,29 @@ function viewSave() {
       </div>
     </div>`).join('') || '<div class="card"><div class="tiny muted">No spending in this period.</div></div>'}
 
+  ${S.insight?.ok ? `
+  <div class="card" style="border-color:var(--spend)">
+    <div class="row" style="align-items:flex-start">
+      <div class="dot" style="background:color-mix(in srgb,var(--spend) 14%,transparent)">✦</div>
+      <div class="grow"><div style="font-weight:650;font-size:14px;line-height:1.45">${esc(S.insight.headline)}</div></div>
+    </div>
+    ${(S.insight.items||[]).map(it=>`
+      <div style="margin-top:12px;padding-top:11px;border-top:1px solid var(--line)">
+        <div class="tiny" style="line-height:1.6">${esc(it.why)}</div>
+        <div class="tiny ok" style="margin-top:5px;line-height:1.5">→ ${esc(it.action)}</div>
+      </div>`).join('')}
+    <div class="tiny" style="color:var(--dim);margin-top:11px">Reasoned by the agent · amounts computed in code, never by the model</div>
+  </div>` : (S.state?.llm === false ? `
+  <div class="card" style="border-style:dashed">
+    <div class="tiny muted" style="line-height:1.6"><b style="color:var(--ink)">Findings are rule-based right now.</b>
+    Add an <code>ANTHROPIC_API_KEY</code> and the agent will read them, tell you which three matter and why, and auto-categorise every unknown merchant.</div>
+  </div>` : '')}
+
   ${sp?.uncategorisedShare > 5 ? `<div class="card" style="border-color:var(--warn)">
     <div class="tiny" style="line-height:1.6"><b style="color:var(--warn)">${sp.uncategorisedShare}% uncategorised.</b>
     No rule list covers every merchant. Tell me what these are and I'll remember them permanently.</div>
-    <button class="btn ghost" onclick="teachNext()">Categorise them (${(S.unknowns||[]).length} left)</button>
+    ${S.state?.llm ? `<button class="btn go" onclick="autoCategorise()">${S.busy?'Thinking…':'Let the agent categorise them'}</button>`:''}
+    <button class="btn ghost" onclick="teachNext()">Do it myself (${(S.unknowns||[]).length} left)</button>
   </div>` : ''}
 
   ${fc ? `<div class="sec"><span class="lbl">12-month forecast</span><span class="act">with bands</span></div>
@@ -428,6 +464,7 @@ function viewWallet() {
   const total = held.reduce((a,i)=>a+i.balanceCents,0);
   const ex = sp?.excluded ?? {};
   return `
+  ${BRAND()}
   <div class="top"><h1>Pay</h1><span class="sp"></span>
     <button class="chipbtn" onclick="S.tab='settings';render()">⚙</button></div>
   <div class="tiny muted">Your accounts, read through Plaid. Verafi holds nothing.</div>
@@ -485,6 +522,7 @@ function viewAgent() {
   const CAP = { observe:'Watches and flags', recommend:'Researches and advises',
                 execute_authorized:'Acts with your approval', execute_preauthorized:'Acts inside a signed limit' };
   return `
+  ${BRAND()}
   <div class="top"><h1>Agents</h1><span class="sp"></span>
     <button class="chipbtn" onclick="runAgentsNow()">${S.busy?'<span class="spin"></span>':'↻ run'}</button></div>
   <div class="tiny muted">${(st.agents??[]).filter(a=>a.enabled).length} of ${(st.agents??[]).length} running · every 24h</div>
@@ -583,6 +621,17 @@ function viewSettings() {
   <div class="sec"><span class="lbl">Danger</span></div>
   <div class="card"><button class="btn ghost" style="color:var(--dang)" onclick="wipe()">Erase everything and start over</button></div>
   ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}`;
+}
+
+async function autoCategorise() {
+  S.busy = true; render();
+  try {
+    const r = await api('/api/autocategorise', {});
+    if (r.ok) alert(`Categorised ${r.learned} merchants for $${(r.costUsd||0).toFixed(3)}.`);
+    else alert(r.error || r.reason);
+    await load();
+  } catch (e) { S.error = e.message; }
+  S.busy = false; render();
 }
 
 async function teachNext() {

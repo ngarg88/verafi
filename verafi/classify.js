@@ -30,7 +30,9 @@ const RULES = [
   [FLOW.TAX,        /\birs\b|internal revenue|franchise tax|dept.? of revenue|state tax|estimated tax|turbotax payment|tax pay(ment)?/i],
   // Real bank descriptors are abbreviated and ugly. These were written against actual
   // statement text, not tidy merchant names.
-    [FLOW.DEBT_PAYMENT, /financial ?(svcs|services)?$|motor ?credit|auto ?fin|financial\b(?! aid)|acceptance corp|payment thank ?you|autopay|auto ?pay|online ?payment|epay\b|e-?payment|card ?p(ay|mt)|cc ?p(ay|mt)|credit ?crd|credit ?card ?(pmt|payment|pymt)?|loan ?p(ay|mt)|student ?loan|navient|nelnet|mohela|sallie ?mae|principal|mortgage|mtg\b|amex ?epayment|discover ?e-?pymt|citi ?(card|autopay)|capital ?one ?(mobile ?)?pymt|chase ?credit|boa ?cc|bk ?of ?america ?cc|sofi ?credit|barclay|synchrony|heloc|line of credit/i],
+    // A card issuer's name standing alone in a descriptor is a payment TO that card,
+  // not a purchase. "SoFi", "DISCOVER", "AMEX" are never merchants you buy things from.
+  [FLOW.DEBT_PAYMENT, /^(sofi|discover|amex|american express|capital ?one|cap ?one|citi|chase|barclay|synchrony|us ?bank|wells ?fargo)\b(?!.*(market|grocer|store|gas|fuel|restaurant))|discover ?cap ?one|financial ?(svcs|services)?$|motor ?credit|auto ?fin|financial\b(?! aid)|acceptance corp|payment thank ?you|autopay|auto ?pay|online ?payment|epay\b|e-?payment|card ?p(ay|mt)|cc ?p(ay|mt)|credit ?crd|credit ?card ?(pmt|payment|pymt)?|loan ?p(ay|mt)|student ?loan|navient|nelnet|mohela|sallie ?mae|principal|mortgage|mtg\b|amex ?epayment|discover ?e-?pymt|citi ?(card|autopay)|capital ?one ?(mobile ?)?pymt|chase ?credit|boa ?cc|bk ?of ?america ?cc|sofi ?credit|barclay|synchrony|heloc|line of credit/i],
     // "To Checking - 0162", "To Dream House Vault" - money you moved to yourself.
   [FLOW.TRANSFER,   /^to [a-z]|to (checking|savings|vault|reserve|goal|bucket|pocket)|from (checking|savings)|round ?up|save ?as ?you ?go|transfer|zelle|venmo|cash ?app|paypal ?transfer|wire\b|ach ?(credit|debit)|to ?savings|from ?savings|internal|xfer|withdraw|deposit\b|online ?banking|bank ?transfer|acct ?trnsfr|trnsfr|p2p\b|apple ?cash/i],
   [FLOW.INCOME,     /payroll|direct ?dep|salary|paycheck|refund|reimburse|interest ?paid|dividend|cashback ?reward/i]
@@ -42,7 +44,12 @@ const RULES = [
  * because wrongly EXCLUDING real spend hides money, and wrongly INCLUDING a 401k is
  * insulting. Neither is free, so we surface the uncertainty instead of hiding it.
  */
-export function classify(tx) {
+export function classify(tx, learnedFlow = null) {
+  if (learnedFlow) {
+    const n = `${tx.merchantName ?? ''} ${tx.merchantId ?? ''}`.toLowerCase();
+    for (const [pat, flow] of Object.entries(learnedFlow))
+      if (n.includes(pat)) return { flow, confidence: 0.95, why: 'learned' };
+  }
   const text = `${tx.merchantName ?? ''} ${tx.merchantId ?? ''} ${tx.category ?? ''}`;
 
   if (tx.amountCents < 0) return { flow: FLOW.INCOME, confidence: 0.95, why: 'money in' };
@@ -56,8 +63,8 @@ export function classify(tx) {
 }
 
 /** Only real spending. This is what every agent and every total must run on. */
-export function expensesOnly(tx) {
-  return tx.filter(t => classify(t).flow === FLOW.EXPENSE);
+export function expensesOnly(tx, learnedFlow = null) {
+  return tx.filter(t => classify(t, learnedFlow).flow === FLOW.EXPENSE);
 }
 
 /** Where the money actually went, so the app can show it instead of hiding the exclusions. */
