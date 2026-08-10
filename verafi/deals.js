@@ -144,11 +144,52 @@ export const DEAL_CATEGORIES = {
                               `Which delivery service is cheapest for my usual orders?`] }
 };
 
+const CUSTOM_ICONS = Object.freeze({
+  clothing:'ph:t-shirt-bold', family:'ph:baby-bold', travel:'ph:airplane-tilt-bold',
+  home:'ph:house-line-bold', electronics:'ph:laptop-bold', dining:'ph:fork-knife-bold',
+  other:'ph:sparkle-bold'
+});
+
+/** User-owned shopping category. It is useful even when transaction history is empty. */
+export function makeDealCategory(p = {}) {
+  const label = String(p.label ?? '').trim().slice(0, 48);
+  const context = String(p.context ?? '').trim().slice(0, 320);
+  const kind = CUSTOM_ICONS[p.kind] ? p.kind : 'other';
+  const budgetCents = Math.round(Number(p.budgetCents));
+  const defaultDropPct = Math.round(Number(p.defaultDropPct ?? 15));
+  if (label.length < 2) throw new Error('give this category a name');
+  if (context.length < 5) throw new Error('add who or what this category is for');
+  if (!Number.isInteger(budgetCents) || budgetCents <= 0) throw new Error('add a valid budget');
+  if (!Number.isInteger(defaultDropPct) || defaultDropPct < 1 || defaultDropPct > 90)
+    throw new Error('price-drop alerts must be between 1% and 90%');
+  return {
+    id:'cat_' + Math.random().toString(36).slice(2, 9),
+    key:'custom_' + label.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,32)
+      + '_' + Math.random().toString(36).slice(2,5),
+    label, context, kind, icon:CUSTOM_ICONS[kind], budgetCents, defaultDropPct,
+    createdAt:Date.now(), custom:true
+  };
+}
+
+function customPreset(c) {
+  const budget = Math.max(1, Math.round(c.budgetCents/100));
+  const subject = c.label.toLowerCase();
+  return {
+    ...c, budget, spentYearCents:0,
+    basis:c.context,
+    asks:[
+      `Find the best ${subject} under $${budget}. ${c.context}`,
+      `Compare current sales for ${subject}. ${c.context}`,
+      `What ${subject} should I buy now versus wait for? ${c.context}`
+    ]
+  };
+}
+
 /**
  * Build the deal surface for THIS user: their biggest categories first, with budgets
  * anchored to what they have actually spent rather than numbers we invented.
  */
-export function dealPresets(tx, now = Date.now()) {
+export function dealPresets(tx, now = Date.now(), customCategories = []) {
   const ex = normalizeTransactions(expensesOnly(tx));
   const yr = ex.filter(t => t.postedAt > now - 365*DAY && t.amountCents > 0);
   const byCat = {};
@@ -168,10 +209,13 @@ export function dealPresets(tx, now = Date.now()) {
       basis: spent ? `${matches.length} purchases · $${Math.round(spent/100).toLocaleString()} in the last year`
                    : 'No matching history yet — research still works',
       budget,
-      asks: def.asks({ budget })
+      asks: def.asks({ budget }), custom:false, defaultDropPct:15
     });
   }
-  return out.sort((a,b) => b.spentYearCents - a.spentYearCents);
+  return [
+    ...(customCategories ?? []).map(customPreset),
+    ...out.sort((a,b) => b.spentYearCents - a.spentYearCents)
+  ];
 }
 
 /** Does this read like "find me something to buy" rather than "analyse my spending"? */
@@ -189,14 +233,14 @@ export function isDealQuery(q) {
  * That is the whole flow minus the part that needs a business entity, and it is the part
  * that actually saves money anyway.
  */
-export function holdDeal({ store, title, url, priceCents, targetCents, category, notes }) {
+export function holdDeal({ store, title, url, priceCents, targetCents, category, notes, recommendation }) {
   const D = store.data;
   D.watchlist ??= [];
   const item = {
     id: 'hold_' + Math.random().toString(36).slice(2,9),
     title, url, category,
     foundPriceCents: priceCents, targetCents: targetCents ?? Math.round(priceCents * 0.9),
-    currentPriceCents: priceCents, notes: notes ?? null,
+    currentPriceCents: priceCents, notes: notes ?? null, recommendation:recommendation ?? null,
     status: 'watching', createdAt: Date.now(), lastCheckedAt: Date.now(), history: [{ at: Date.now(), priceCents }]
   };
   D.watchlist.unshift(item);
