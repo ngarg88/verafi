@@ -34,9 +34,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          app_dir=/home/ubuntu/verafi-app
-          release_dir="/home/ubuntu/verafi-release-${GITHUB_SHA}"
-          backup_dir="/home/ubuntu/verafi-backup-${GITHUB_RUN_ID}"
+          app_dir=/opt/verafi
+          release_dir="/opt/verafi-release-${GITHUB_SHA}"
+          backup_dir="/opt/verafi-backup-${GITHUB_RUN_ID}"
 
           test -f /etc/verafi.env
           test -d "$app_dir"
@@ -88,9 +88,9 @@ jobs:
 
           test -d "$data_dir"
 
-          rm -rf "$release_dir"
-          mkdir -p "$release_dir"
-          cp -a packages verafi package.json "$release_dir/"
+          sudo rm -rf "$release_dir"
+          sudo mkdir -p "$release_dir"
+          sudo cp -a packages verafi package.json "$release_dir/"
 
           preserve_runtime_dir() {
             local source_dir="$1"
@@ -103,9 +103,9 @@ jobs:
                   "$release_dir"/*) ;;
                   *) echo "Refusing unsafe runtime-data target" >&2; exit 1 ;;
                 esac
-                rm -rf "$target_dir"
-                mkdir -p "$(dirname "$target_dir")"
-                cp -a "$source_dir" "$target_dir"
+                sudo rm -rf "$target_dir"
+                sudo mkdir -p "$(dirname "$target_dir")"
+                sudo cp -a "$source_dir" "$target_dir"
                 ;;
             esac
           }
@@ -117,17 +117,17 @@ jobs:
 
           rollback() {
             sudo systemctl stop verafi || true
-            if [ -d "$backup_dir" ]; then
-              rm -rf "$app_dir"
-              mv "$backup_dir" "$app_dir"
+            if sudo test -d "$backup_dir"; then
+              sudo rm -rf "$app_dir"
+              sudo mv "$backup_dir" "$app_dir"
               sudo systemctl start verafi
             fi
           }
           trap rollback ERR
 
           sudo systemctl stop verafi
-          mv "$app_dir" "$backup_dir"
-          mv "$release_dir" "$app_dir"
+          sudo mv "$app_dir" "$backup_dir"
+          sudo mv "$release_dir" "$app_dir"
           sudo systemctl start verafi
 
           healthy=false
@@ -141,5 +141,5 @@ jobs:
           test "$healthy" = true
 
           trap - ERR
-          rm -rf "$backup_dir"
+          sudo rm -rf "$backup_dir"
           sudo systemctl --no-pager --full status verafi
