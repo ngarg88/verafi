@@ -41,6 +41,42 @@ export const COST = Object.freeze({
 const DAY = 86400000;
 const f0 = c => '$' + Math.round(c/100).toLocaleString('en-US');
 
+export function parseDealDecision(text, sources, images = []) {
+  const raw = String(text ?? '').trim();
+  const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1));
+    const known = (sources ?? []).filter(s => s?.url);
+    const products = (Array.isArray(parsed.products) ? parsed.products : []).slice(0, 3)
+      .map((p, i) => {
+        const sourceIndex = Number(p.sourceIndex) - 1;
+        const source = known[sourceIndex] ?? known.find(s => s.url === p.url) ?? known[i];
+        const price = Number(p.price);
+        const imageIndex = Number(p.imageIndex) - 1;
+        const image = images[imageIndex];
+        return {
+          name: String(p.name ?? '').trim().slice(0, 120),
+          label: String(p.label ?? (i === 0 ? 'Best overall' : `Option ${i + 1}`)).trim().slice(0, 32),
+          price: Number.isFinite(price) && price > 0 ? +price.toFixed(2) : null,
+          seller: String(p.seller ?? source?.title ?? 'Seller').trim().slice(0, 60),
+          url: source?.url ?? '',
+          image: /^https?:\/\//.test(image?.url ?? '') ? image.url : '',
+          highlights: (Array.isArray(p.highlights) ? p.highlights : []).map(String).slice(0, 3),
+          shipping: String(p.shipping ?? '').trim().slice(0, 100),
+          tradeoff: String(p.tradeoff ?? '').trim().slice(0, 180),
+          why: String(p.why ?? '').trim().slice(0, 220)
+        };
+      }).filter(p => p.name && p.price && p.url);
+    if (!products.length) return null;
+    return {
+      summary: String(parsed.summary ?? products[0].why ?? '').trim().slice(0, 360),
+      verification: String(parsed.verification ?? '').trim().slice(0, 260),
+      products
+    };
+  } catch { return null; }
+}
+
 /**
  * DEAL CATEGORIES, DERIVED FROM WHAT YOU ACTUALLY BUY
  *
@@ -224,11 +260,16 @@ export async function researchDeal({ query, tx, model = 'claude-sonnet-5', meter
   const system = `You are a research agent inside a personal finance app. You find real, current options and you never book or pay for anything.
 
 Rules:
-- Search the web. Cite the sources you used.
-- Give 3 concrete options with real current prices, not ranges you invented.
+- Use the supplied web evidence and give exactly 3 concrete options with real current prices, not ranges you invented.
 - Ground affordability in the context provided.
 - If you cannot find current prices, say so plainly. Do not estimate.
-- End with what the user should verify themselves before booking.
+- Return ONLY one JSON object. No markdown or prose outside JSON.
+- Each product must cite one supplied source by its 1-based sourceIndex. Never invent a URL.
+- If an available product image clearly matches the named product, include its 1-based imageIndex. Otherwise use null.
+- Use short factual highlights and one honest tradeoff per product.
+
+Schema:
+{"summary":"why the first option is the best match","products":[{"name":"product name","label":"Best overall","price":139.99,"seller":"merchant","sourceIndex":1,"imageIndex":1,"highlights":["7.2 lbs","Hardside","4 spinner wheels"],"shipping":"Free shipping and returns","tradeoff":"Slightly heavier","why":"why it fits"}],"verification":"what to verify at merchant checkout"}
 
 Context: ${safeContext}.`;
 
@@ -250,10 +291,14 @@ Context: ${safeContext}.`;
 
   const answer = out.text;
   const sources = out.sources ?? [];
+  const decision = parseDealDecision(answer, sources, out.images ?? []);
   const costUsd = out.costUsd ?? 0;
 
   const result = {
-    ok: true, answer, sources, context: ctx, provider: out.provider,
+    ok: true,
+    answer: decision?.summary || answer,
+    decision,
+    sources, context: ctx, provider: out.provider,
     costUsd: +costUsd.toFixed(4),
     disclaimer: 'Research only. This agent cannot book or pay for anything.'
   };

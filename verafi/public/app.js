@@ -22,7 +22,7 @@ const $m0 = (c) => (c/100).toLocaleString('en-US',{style:'currency',currency:'US
 const esc = (s) => String(s ?? '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 const title = (s) => String(s ?? '').replace(/[-_]/g,' ').replace(/\b\w/g, m => m.toUpperCase());
 
-const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, unknowns:null, taxonomy:null, insight:null, lastQuery:null, spend:null, save:null, forecast:null, busy:false, error:null };
+const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, unknowns:null, taxonomy:null, insight:null, lastQuery:null, spend:null, save:null, forecast:null, busy:false, error:null, compare:[], compareOpen:false, actionNote:null };
 
 const ICONS = {
   ask:'<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
@@ -140,6 +140,10 @@ function viewShop() {
     ${answerCard(r)}`;
   }
 
+  if (r?.kind === 'deal' && r.decision?.products?.length) {
+    return `${BRAND()}${answerCard(r)}${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}`;
+  }
+
   return `
   ${BRAND()}
   <div class="top"><h1>Shop</h1><span class="sp"></span>
@@ -194,6 +198,7 @@ function viewShop() {
 
 function answerCard(r) {
   if (!r) return '';
+  if (r.kind === 'deal' && r.decision?.products?.length) return shopDecision(r);
   return `
     <div class="sec"><span class="lbl">${esc(r.label ?? 'Answer')}</span>${r.costUsd?`<span class="act">$${r.costUsd.toFixed(3)}</span>`:''}</div>
     <div class="card">
@@ -212,12 +217,95 @@ function answerCard(r) {
     </div>`;
 }
 
+function safeUrl(v) {
+  try { const u = new URL(String(v)); return /^https?:$/.test(u.protocol) ? u.href : ''; }
+  catch { return ''; }
+}
+function money(v) { return Number(v).toLocaleString('en-US',{style:'currency',currency:'USD'}); }
+function productIcon(query='') {
+  const q=String(query).toLowerCase();
+  if (/luggage|suitcase|carry.?on|bag/.test(q)) return 'ph:suitcase-rolling-bold';
+  if (/flight|trip|hotel|travel|vacation/.test(q)) return 'ph:airplane-tilt-bold';
+  if (/laptop|computer|tablet|phone|electronics/.test(q)) return 'ph:laptop-bold';
+  if (/shoe|sneaker|running/.test(q)) return 'ph:sneaker-bold';
+  if (/watch|jewel/.test(q)) return 'ph:watch-bold';
+  if (/sofa|furniture|home/.test(q)) return 'ph:armchair-bold';
+  return 'ph:package-bold';
+}
+function sourceName(url, titleText) {
+  try { return new URL(url).hostname.replace(/^www\./,'').split('.')[0].replace(/^./,c=>c.toUpperCase()); }
+  catch { return String(titleText||'Source').split(/[|—-]/)[0].trim().slice(0,18); }
+}
+function shopDecision(r) {
+  const d=r.decision, products=d.products||[], selected=new Set(S.compare||[]);
+  const sources=(r.evidence||[]).map(x=>{
+    const m=String(x).match(/^(.*?)\s+—\s+(https?:\/\/\S+)/); return m?{title:m[1],url:m[2]}:null;
+  }).filter(Boolean);
+  if (S.compareOpen) return compareDecision(products);
+  return `<section class="shop-results">
+    <div class="shop-query"><iconify-icon icon="ph:magnifying-glass-bold"></iconify-icon>
+      <span>${esc(S.lastQuery||'Your search')}</span><button onclick="editShopSearch()">Edit</button></div>
+    <div class="source-strip"><div class="source-status"><span></span><b>Researched now</b><em>Checked ${sources.length} live source${sources.length===1?'':'s'} for current prices.</em></div>
+      <div class="source-badges">${sources.slice(0,5).map(s=>`<a href="${safeUrl(s.url)}" target="_blank" rel="noopener"><i>${esc(sourceName(s.url,s.title).slice(0,1))}</i>${esc(sourceName(s.url,s.title))}</a>`).join('')}</div></div>
+    <div class="best-intro"><iconify-icon icon="ph:sparkle-fill"></iconify-icon><div><h2>Best match</h2><p>${esc(d.summary)}</p></div></div>
+    <div class="product-stack">${products.map((p,i)=>productCard(p,i,selected.has(i))).join('')}</div>
+    <button class="compare-all" onclick="openComparison()"><iconify-icon icon="ph:scales-bold"></iconify-icon><span>Compare all ${products.length}<small>See prices, features and tradeoffs side by side</small></span><b>›</b></button>
+    ${S.actionNote?`<div class="action-toast">${esc(S.actionNote)}</div>`:''}
+    <div class="merchant-guard"><iconify-icon icon="ph:shield-check-bold"></iconify-icon><span><b>Your checkout stays with the merchant.</b><small>Verafi never sees or stores your payment information.</small></span></div>
+  </section>`;
+}
+function productCard(p,i,isCompared) {
+  const url=safeUrl(p.url), top=i===0;
+  return `<article class="product-card ${top?'featured':''}">
+    <div class="product-rank">${i+1}</div>
+    <div class="product-visual">${safeUrl(p.image)?`<img src="${safeUrl(p.image)}" alt="${esc(p.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()"/>`:''}<iconify-icon icon="${productIcon(S.lastQuery)}"></iconify-icon></div>
+    <div class="product-copy"><span class="product-label label-${i}">${esc(p.label)}</span>
+      <h3>${esc(p.name)}</h3>
+      <div class="product-highlights">${(p.highlights||[]).map(esc).join('<b>•</b>')}</div>
+      <div class="price-line"><strong>${money(p.price)}</strong><span>${esc(p.seller)}</span></div>
+      ${p.shipping?`<div class="shipping">${esc(p.shipping)}</div>`:''}
+      ${p.tradeoff?`<div class="tradeoff"><b>Tradeoff</b> ${esc(p.tradeoff)}</div>`:''}
+    </div>
+    <div class="product-actions">
+      ${top?`<button class="save-spend" onclick="saveProduct(${i})"><iconify-icon icon="ph:wallet-bold"></iconify-icon><span>Save to Spend<small>Add to your plan & track price</small></span><b>›</b></button>`:''}
+      <div class="secondary-actions ${top?'':'four-actions'}"><button class="${isCompared?'selected':''}" onclick="toggleProductCompare(${i})"><iconify-icon icon="ph:scales-bold"></iconify-icon>${isCompared?'Added':'Compare'}</button>
+      ${top?'':`<button onclick="saveProduct(${i})"><iconify-icon icon="ph:wallet-bold"></iconify-icon>Save</button>`}
+      <button onclick="watchProduct(${i})"><iconify-icon icon="ph:bell-bold"></iconify-icon>Watch price</button>
+      <button onclick="visitProduct(${i})" ${url?'':'disabled'}><iconify-icon icon="ph:arrow-square-out-bold"></iconify-icon>Visit seller</button></div>
+    </div>
+  </article>`;
+}
+function compareDecision(products) {
+  return `<section class="shop-results compare-view"><button class="back-result" onclick="S.compareOpen=false;render()">← Results</button>
+    <div class="compare-head"><span>Side-by-side</span><h2>Compare your best matches</h2><p>Current prices and the tradeoffs that matter.</p></div>
+    <div class="compare-grid">${products.map((p,i)=>`<article class="compare-card ${i===0?'picked':''}"><span>${esc(p.label)}</span><iconify-icon icon="${productIcon(S.lastQuery)}"></iconify-icon><h3>${esc(p.name)}</h3><strong>${money(p.price)}</strong><small>${esc(p.seller)}</small><ul>${(p.highlights||[]).map(h=>`<li>${esc(h)}</li>`).join('')}</ul><p>${esc(p.tradeoff||p.why)}</p><button onclick="saveProduct(${i})">Save to Spend</button></article>`).join('')}</div>
+    <div class="merchant-guard"><iconify-icon icon="ph:shield-check-bold"></iconify-icon><span><b>Your checkout stays with the merchant.</b><small>Prices and availability can change at checkout.</small></span></div></section>`;
+}
+function decisionProduct(i) { return S.answer?.decision?.products?.[i]; }
+function editShopSearch(){ S.answer=null;S.compare=[];S.compareOpen=false;render();setTimeout(()=>$('q')?.focus(),40); }
+function toggleProductCompare(i){ S.compare=S.compare.includes(i)?S.compare.filter(x=>x!==i):[...S.compare,i];render(); }
+function openComparison(){ S.compareOpen=true;render();scrollTo(0,0); }
+function visitProduct(i){ const u=safeUrl(decisionProduct(i)?.url);if(u)open(u,'_blank','noopener'); }
+async function saveProduct(i){
+  const p=decisionProduct(i); if(!p)return;
+  await api('/api/deals/hold',{title:p.name,url:safeUrl(p.url),priceCents:Math.round(p.price*100),category:S.openDeal??'other',notes:p.tradeoff||p.why});
+  S.actionNote=`${p.name} was saved to Spend.`; await load();
+}
+async function watchProduct(i){
+  const p=decisionProduct(i); if(!p)return;
+  const target=prompt(`Notify me at or below what price?`, String(Math.floor(p.price)));
+  if(!target)return;
+  const ceiling=Number(target); if(!Number.isFinite(ceiling)||ceiling<=0){S.error='Enter a valid target price.';render();return;}
+  await api('/api/hunts',{name:p.name,ceilingCents:Math.round(ceiling*100),traits:[p.seller,p.url].filter(Boolean),source:'web',category:S.openDeal??'other'});
+  S.actionNote=`Price watch created for ${p.name} at ${money(ceiling)}.`; await load();
+}
+
 const md = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<b style="color:var(--ink)">$1</b>');
 
 async function doAsk(preset, presetQuery) {
   const q = presetQuery ?? ($('q') ? $('q').value : '');
   if (!q && !preset) { S.error = 'Type what you are looking for first.'; render(); return; }
-  S.busy = true; S.error = null; S.answer = null; S.lastQuery = q; render();
+  S.busy = true; S.error = null; S.answer = null; S.lastQuery = q; S.compare=[];S.compareOpen=false;S.actionNote=null; render();
   // Never let a hung request look like a dead button.
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 30000);
@@ -760,7 +848,7 @@ function render() {
 
   if (S.locked) { $('tabs').innerHTML = ''; setTimeout(()=>$('pc')?.focus(), 60); return; }
   $('tabs').innerHTML = !st?.linked ? '' :
-    [['ask','Shop'],['spend','Spend'],['save','Save'],['wallet','Pay'],['agent','Agents']].map(([k,l])=>
+    [['ask','Shop'],['spend','Spend'],['save','Save'],['wallet','Wallet'],['agent','Agents']].map(([k,l])=>
       `<button class="${S.tab===k?'on':''}" onclick="S.tab='${k}';render();scrollTo(0,0)">
          <svg viewBox="0 0 24 24">${ICONS[k]}</svg>${l}</button>`).join('');
 

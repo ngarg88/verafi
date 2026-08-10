@@ -462,6 +462,7 @@ const ROUTES = {
                steps:[{tool:'context.load',detail:out.context.summary},
                       {tool:'web.search',detail: out.ok ? `${(out.sources||[]).length} sources` : 'unavailable'}],
                answer: out.answer, evidence: (out.sources||[]).map(s=>`${s.title||s.url} — ${s.url}`),
+               decision: out.decision,
                howToFix: out.howToFix, ok: out.ok, cached: out.cached, capped: out.capped,
                costUsd: out.costUsd,
                meter: { spentUsd: D.meter[month].monthUsd, queries: D.meter[month].queries,

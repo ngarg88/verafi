@@ -71,8 +71,20 @@ ck('error renders', els.app.innerHTML.includes('over 30 seconds'));
 S.error=null; S.busy=true; ctx.render();
 ck('busy state shows', els.app.innerHTML.includes('Researching'));
 
+// structured Shop results render as a dedicated decision workspace with real actions
+S.busy=false; S.lastQuery='lightweight carry-on suitcase under $150';
+S.answer={kind:'deal',label:'Deal research',ok:true,evidence:['Amazon — https://amazon.com'],decision:{
+  summary:'The best balance of weight and value.',products:[
+    {name:'Samsonite Freeform Carry-On',label:'Best overall',price:139.99,seller:'Amazon',url:'https://amazon.com/item',highlights:['7.8 lbs','Hardside'],shipping:'Free shipping',tradeoff:'A little heavier.'},
+    {name:'Travelpro Maxlite 5',label:'Lightest',price:144.49,seller:'Travelpro',url:'https://travelpro.com/item',highlights:['5.4 lbs','Softside'],shipping:'Free shipping',tradeoff:'Higher price.'}
+  ]}};
+ctx.render(); const shop=els.app.innerHTML;
+ck('structured Shop results render',shop.includes('Best match')&&shop.includes('Samsonite Freeform'));
+ck('Shop actions render',shop.includes('Save to Spend')&&shop.includes('Watch price')&&shop.includes('Visit seller'));
+ck('results replace the Shop homepage',!shop.includes('Price watches')&&!shop.includes('Your categories'));
+
 // category drill-in still renders the ask surface
-S.busy=false; S.openDeal='travel'; S.answer=null; ctx.render();
+S.openDeal='travel'; S.answer=null; ctx.render();
 const h3=els.app.innerHTML;
 ck('category detail renders', h3.includes('Travel') && h3.includes('2763'));
 ck('preset question renders', h3.includes('Best value trip'));
