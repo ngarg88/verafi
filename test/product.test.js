@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isDealQuery, purchaseContext } from '../verafi/deals.js';
+import { isDealQuery, purchaseContext, makeDealCategory, dealPresets } from '../verafi/deals.js';
 import { AGENTS, reviewAgents } from '../verafi/agents.js';
 import { Plaid } from '../verafi/plaid.js';
+import { makeRule, recommendWatch } from '../verafi/rules.js';
 
 const DAY=86400000, NOW=Date.UTC(2026,7,10);
 const tx=(merchant,amount,daysAgo,o={})=>({externalId:`${merchant}-${daysAgo}`,merchantId:merchant.toLowerCase().replace(/\W+/g,'-'),
@@ -53,4 +54,44 @@ test('Plaid Link requests the full supported history window',async()=>{
   p.call=async(_path,b)=>{body=b;return {link_token:'x'};};
   await p.createLinkToken('me');
   assert.equal(body.transactions.days_requested,730);
+});
+
+test('custom shopping categories work without matching transaction history',()=>{
+  const c=makeDealCategory({label:"Kids' clothes",context:'Two boys under 5; sizes 4T and 5T',kind:'family',budgetCents:15000,defaultDropPct:20});
+  const presets=dealPresets([],NOW,[c]);
+  assert.equal(presets[0].custom,true);
+  assert.equal(presets[0].label,"Kids' clothes");
+  assert.match(presets[0].asks[0],/Two boys under 5/);
+  assert.equal(presets[0].defaultDropPct,20);
+});
+
+test('percentage price alerts produce deterministic buy-now and wait decisions',()=>{
+  const rule=makeRule({name:'Winter coats',referencePriceCents:12000,alertDropPct:20,traits:[],source:'web'});
+  assert.equal(rule.ceilingCents,9600);
+  const wait=recommendWatch(rule,10500);
+  assert.equal(wait.status,'wait');
+  assert.equal(wait.triggered,false);
+  const buy=recommendWatch(rule,9400);
+  assert.equal(buy.status,'buy_now');
+  assert.equal(buy.triggered,true);
+  assert.equal(buy.dropPct,21.7);
+});
+
+test('email notifications escape untrusted product text',async()=>{
+  const names=['NTFY_TOPIC','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID','RESEND_API_KEY','NOTIFY_EMAIL'];
+  const old=Object.fromEntries(names.map(k=>[k,process.env[k]]));
+  for(const k of names)delete process.env[k];
+  process.env.RESEND_API_KEY='test';process.env.NOTIFY_EMAIL='owner@example.com';
+  const oldFetch=global.fetch;let request;
+  global.fetch=async(_url,init)=>{request=JSON.parse(init.body);return new Response('{}',{status:200});};
+  try{
+    const {notify}=await import(`../verafi/notify.js?escape=${Date.now()}`);
+    await notify({title:'Price <script>',lines:['Coat <img src=x>'],url:'https://verafi.example'});
+    assert.match(request.html,/Price &lt;script&gt;/);
+    assert.match(request.html,/Coat &lt;img src=x&gt;/);
+    assert.doesNotMatch(request.html,/<script>|<img/);
+  }finally{
+    global.fetch=oldFetch;
+    for(const k of names)old[k]==null?delete process.env[k]:process.env[k]=old[k];
+  }
 });

@@ -8,7 +8,8 @@ import { dirname, join } from 'node:path';
 const EMPTY = {
   profile: { email: null, cashFloorCents: 200000, linkedAt: null },
   connections: [], instruments: [], transactions: [], agents: [],
-  mandates: [], rules: [], runs: [], savings: [], cursors: {}
+  mandates: [], rules: [], runs: [], savings: [], cursors: {},
+  customCategories: [], hunts: [], watchlist: []
 };
 
 export class Store {

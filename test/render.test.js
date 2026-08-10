@@ -38,7 +38,8 @@ S.state={version:'v15',llm:true,linked:true,transactions:161,agents:[{id:'agt_su
 S.spend={totalCents:2792200,categories:[{key:'bills',label:'Bills',icon:'📄',cents:1834400,share:65.7,subs:[{key:'rent',cents:1,count:1}],merchants:[{name:'X',cents:1,count:1,sub:'rent'}]}],recent:[],excluded:{},uncategorisedShare:2.5};
 S.save={verifiedTotalCents:0,events:[],opportunities:[],reviewQueue:[],recurringAnnualCents:0};
 S.forecast={months:Array.from({length:12},(_,i)=>({month:i,projectedCents:300000-i*100,bandLowCents:290000,bandHighCents:310000}))};
-S.dealCats=[{key:'travel',icon:'✈️',label:'Travel',basis:'You spent $6,200 here',budget:2763,asks:['Best value trip under $2763 for my family']}];
+S.dealCats=[{key:'travel',icon:'✈️',label:'Travel',basis:'You spent $6,200 here',budget:2763,asks:['Best value trip under $2763 for my family']},
+  {id:'cat1',key:'custom_kids',icon:'ph:baby-bold',label:"Kids' clothes",basis:'Two boys under 5; sizes 4T and 5T',context:'Two boys under 5; sizes 4T and 5T',budget:150,defaultDropPct:20,custom:true,asks:['Find durable kids clothes']}];
 S.watchlist=[]; S.hunts=[]; S.unknowns=[]; S.taxonomy=[]; S.presets=[]; S.insight=null; S.cards={instruments:[],cardKeys:[]};
 
 // ---- THE ACTUAL QUESTION: does an answer render? ----
@@ -102,8 +103,15 @@ for (const t of ['ask','spend','save','wallet','agent','settings']) {
   try { S.tab=t; ctx.render(); ck('tab renders: '+t, els.app.innerHTML.length>200, els.app.innerHTML.length+' chars'); }
   catch(e){ ck('tab renders: '+t, false, e.message); }
 }
-S.tab='save';ctx.render();ck('review candidates are visible and not called savings',els.app.innerHTML.includes('Needs your review')&&els.app.innerHTML.includes('not claimed savings'));
+S.tab='spend';ctx.render();ck('spending breakdown moved from Save to Spend',els.app.innerHTML.includes('Where it went')&&els.app.innerHTML.includes('Bills'));
+S.tab='save';ctx.render();ck('Save is a decision queue and potential remains uncounted',els.app.innerHTML.includes('Needs your decision')&&els.app.innerHTML.includes('not counted'));
+ck('Save removes the competing category dashboard and forecast',!els.app.innerHTML.includes('What you actually spend')&&!els.app.innerHTML.includes('12-month forecast'));
 S.tab='agent';ctx.render();ck('agent coverage and candidate depth render',els.app.innerHTML.includes('Transactions reviewed')&&els.app.innerHTML.includes('5 candidates'));
+ck('custom shopping agent is visible',els.app.innerHTML.includes("Kids' clothes")&&els.app.innerHTML.includes('20% default alert'));
+S.openAgent='agt_sub';ctx.render();ck('per-agent investigation expands',els.app.innerHTML.includes('What it checked')&&els.app.innerHTML.includes('Current result')&&els.app.innerHTML.includes('Next action'));
+S.tab='ask';S.openDeal=null;S.addCategoryOpen=true;S.answer=null;ctx.render();ck('custom category builder renders',els.app.innerHTML.includes('Create a shopping agent')&&els.app.innerHTML.includes("Kids' clothes"));
+S.addCategoryOpen=false;S.answer={kind:'deal',label:'Deal research',ok:true,evidence:[],decision:{summary:'Best.',products:[{name:'Kids Coat',label:'Best',price:120,seller:'Store',url:'https://store.example/coat',highlights:[]}]}};S.lastQuery='kids coat';
+ctx.watchProduct(0);ck('percentage watch sheet renders',els.app.innerHTML.includes('Tell me when the price drops by')&&els.app.innerHTML.includes('recommend')&&els.app.innerHTML.includes('Start monitoring'));
 S.tab='settings';ctx.render();ck('per-source data coverage renders',els.app.innerHTML.includes('Data coverage')&&els.app.innerHTML.includes('365'));
 console.log('\n'+(fail?fail+' FAILURES':'render path verified — answers reach the DOM'));
 process.exit(fail?1:0);
