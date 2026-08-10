@@ -103,7 +103,7 @@ export function providerOptions() {
     { key:'cerebras', label:'Cerebras', cost:'free', private:true, search:false,
       note:'Same trade as Groq. Very fast.' },
     { key:'openrouter', label:'OpenRouter', cost:'free models', private:false, search:false,
-      note:'Free models may be logged upstream.' },
+      note:'Free models may be logged upstream. Pair with Tavily for live search.' },
     { key:'ollama', label:'Ollama (self-hosted)', cost:'free', private:true, search:false,
       note:'Runs on your own server. Nothing leaves the machine. Needs ~8GB RAM - your free VM has 1GB, so not viable there.' }
   ];
@@ -115,7 +115,11 @@ export function providerOptions() {
  * this call — so it is skipped even if it would normally win on priority.
  */
 function activeProvider({ search = false } = {}) {
-  const usable = (p) => PROVIDERS[p].key() && !(search && PROVIDERS[p].noSearch);
+  const externalSearch = !!process.env.TAVILY_API_KEY;
+  const zeroSpend = process.env.ZERO_SPEND_MODE === '1';
+  const freeOnly = (p) => !zeroSpend || (p === 'openrouter' && PROVIDERS[p].model().endsWith(':free')) || p === 'ollama';
+  const usable = (p) => PROVIDERS[p].key() && freeOnly(p) &&
+    !(search && PROVIDERS[p].noSearch && !externalSearch);
 
   const want = (process.env.LLM_PROVIDER ?? '').toLowerCase();
   if (want && PROVIDERS[want] && usable(want)) return want;
@@ -123,7 +127,8 @@ function activeProvider({ search = false } = {}) {
   // Prefer providers that do not train on your data, but only among ones that can
   // actually do what's being asked.
   const order = search
-    ? ['openai', 'anthropic', 'gemini']
+    ? (externalSearch ? ['openrouter', 'ollama', 'groq', 'cerebras', 'openai', 'anthropic', 'gemini']
+                      : ['openai', 'anthropic', 'gemini'])
     : ['openai', 'anthropic', 'groq', 'cerebras', 'ollama', 'gemini', 'openrouter'];
   for (const p of order) if (usable(p)) return p;
   return null;
@@ -141,11 +146,36 @@ export function providerInfo({ search = false } = {}) {
   const trains = typeof PROVIDERS[p].trainsOnYourData === 'function'
     ? PROVIDERS[p].trainsOnYourData() : PROVIDERS[p].trainsOnYourData;
   return { provider: p, available: true, model: PROVIDERS[p].model(), trainsOnYourData: trains,
-           canSearchWeb: !PROVIDERS[p].noSearch,
+           canSearchWeb: !PROVIDERS[p].noSearch || !!process.env.TAVILY_API_KEY,
+           searchProvider: search && process.env.TAVILY_API_KEY ? 'tavily' : undefined,
            allowPersonal: !trains || process.env.ALLOW_PERSONAL_ON_FREE_TIER === '1' };
 }
 
 export function hasLLM() { return !!activeProvider(); }
+
+function quotaDay() { return new Date().toISOString().slice(0, 10); }
+
+async function tavilySearch({ query, meter, signal }) {
+  const monthlyLimit = Number(process.env.TAVILY_MONTHLY_LIMIT ?? 1000);
+  const used = meter?.tavilySearches ?? 0;
+  if (used >= monthlyLimit) return { ok:false, reason:'search_quota_reached', used, limit:monthlyLimit };
+  try {
+    const r = await fetch('https://api.tavily.com/search', {
+      method:'POST', signal, headers:{ 'content-type':'application/json' },
+      body:JSON.stringify({ api_key:process.env.TAVILY_API_KEY, query,
+        search_depth:'basic', max_results:5, include_answer:false, include_raw_content:false })
+    });
+    if (!r.ok) return { ok:false, reason:`search_http_${r.status}`, detail:(await r.text()).slice(0,200) };
+    const j = await r.json();
+    const sources = (j.results ?? []).filter(x=>x.url).map(x=>({
+      url:x.url, title:x.title || x.url, content:String(x.content ?? '').slice(0,1800)
+    }));
+    if (meter) meter.tavilySearches = used + 1;
+    return { ok:true, sources };
+  } catch (e) {
+    return { ok:false, reason:e.name === 'AbortError' ? 'timeout' : 'search_network', detail:e.message };
+  }
+}
 
 /** Low-level call with usage accounting. Never throws — returns {ok:false} instead. */
 export async function complete({ system, user, maxTokens = 1200, json = false, meter,
@@ -164,6 +194,14 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
 
   const key = PROVIDERS[info.provider].key();
 
+  if (process.env.ZERO_SPEND_MODE === '1' && info.provider === 'openrouter') {
+    if (!info.model.endsWith(':free')) return { ok:false, reason:'paid_model_blocked' };
+    const day = quotaDay();
+    const daily = meter?.openRouterDaily?.day === day ? meter.openRouterDaily.calls : 0;
+    const limit = Number(process.env.OPENROUTER_DAILY_LIMIT ?? 50);
+    if (daily >= limit) return { ok:false, reason:'reasoning_quota_reached', used:daily, limit };
+  }
+
   const cap = Number(process.env.RESEARCH_MONTHLY_CAP_USD ?? 5);
   if (meter && meter.monthUsd >= cap) return { ok: false, reason: 'monthly_cap_reached', spent: meter.monthUsd };
 
@@ -171,6 +209,16 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
   const ctrl = new AbortController();
   const timeoutMs = Number(process.env.LLM_TIMEOUT_MS ?? 20000);
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+
+  let externalSources = [];
+  if (search && process.env.TAVILY_API_KEY) {
+    const found = await tavilySearch({ query:user, meter, signal:ctrl.signal });
+    if (!found.ok) { clearTimeout(timer); return found; }
+    externalSources = found.sources;
+    const evidence = externalSources.map((s,i)=>
+      `[${i+1}] ${s.title}\nURL: ${s.url}\n${s.content}`).join('\n\n');
+    system += `\n\nUse only the current web evidence below for product facts, prices, availability and links. Cite sources inline as [1], [2], etc. If evidence is insufficient, say so.\n\n${evidence}`;
+  }
 
   // One adapter for every OpenAI-compatible provider: groq, cerebras, openrouter, ollama.
   const cfg = PROVIDERS[info.provider];
@@ -180,7 +228,7 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
         method:'POST', signal: ctrl.signal,
         headers: { 'content-type':'application/json', authorization:`Bearer ${key}` },
         body: JSON.stringify({ model:info.model, instructions:system, input:user,
-          max_output_tokens:maxTokens, ...(search ? { tools:[{ type:'web_search' }] } : {}) })
+          max_output_tokens:maxTokens, ...(search && !externalSources.length ? { tools:[{ type:'web_search' }] } : {}) })
       });
       if (!r.ok) return { ok:false, reason:`http_${r.status}`, detail:(await r.text()).slice(0,300) };
       const j = await r.json();
@@ -215,7 +263,12 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
       let text = (j.choices?.[0]?.message?.content ?? '').trim();
       if (json && !text.trim().startsWith('[')) { const i = text.indexOf('['); if (i>=0) text = text.slice(i); }
       if (meter) meter.calls = (meter.calls ?? 0) + 1;
-      return { ok:true, text, costUsd:0, provider: info.provider, sources: [] };
+      if (meter && info.provider === 'openrouter') {
+        const day = quotaDay();
+        const calls = meter.openRouterDaily?.day === day ? meter.openRouterDaily.calls : 0;
+        meter.openRouterDaily = { day, calls:calls+1 };
+      }
+      return { ok:true, text, costUsd:0, provider: info.provider, sources: externalSources };
     } catch (e) {
       return { ok:false, reason: e.name==='AbortError' ? 'timeout' : 'network', detail:e.message };
     } finally { clearTimeout(timer); }
@@ -230,7 +283,7 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
           systemInstruction: { parts: [{ text: system }] },
           contents: [{ role:'user', parts:[{ text: user }] }],
           generationConfig: { maxOutputTokens: maxTokens, temperature: 0.3 },
-          ...(search ? { tools: [{ googleSearch: {} }] } : {})
+          ...(search && !externalSources.length ? { tools: [{ googleSearch: {} }] } : {})
         })
       });
       if (!r.ok) return { ok:false, reason:`http_${r.status}`, detail:(await r.text()).slice(0,200) };

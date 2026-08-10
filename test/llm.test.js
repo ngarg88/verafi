@@ -32,3 +32,54 @@ test('OpenAI provider performs live search and returns cited sources', async () 
     if (oldProvider == null) delete process.env.LLM_PROVIDER; else process.env.LLM_PROVIDER = oldProvider;
   }
 });
+
+test('zero-spend Shop uses Tavily search and an OpenRouter free model', async () => {
+  const names = ['TAVILY_API_KEY','OPENROUTER_API_KEY','OPENROUTER_MODEL','LLM_PROVIDER','ZERO_SPEND_MODE'];
+  const old = Object.fromEntries(names.map(k => [k, process.env[k]]));
+  Object.assign(process.env, {
+    TAVILY_API_KEY:'tvly-test', OPENROUTER_API_KEY:'or-test',
+    OPENROUTER_MODEL:'meta-llama/llama-3.3-70b-instruct:free',
+    LLM_PROVIDER:'openrouter', ZERO_SPEND_MODE:'1'
+  });
+  const calls = [];
+  const oldFetch = global.fetch;
+  global.fetch = async (url, options) => {
+    calls.push({ url, body:JSON.parse(options.body) });
+    if (String(url).includes('tavily.com')) return new Response(JSON.stringify({ results:[
+      { title:'Example shoe', url:'https://shop.example/shoe', content:'Current price $89.' }
+    ] }), { status:200 });
+    return new Response(JSON.stringify({ choices:[{ message:{ content:'Example shoe is $89 [1].' } }] }), { status:200 });
+  };
+  try {
+    const { complete } = await import(`../verafi/llm.js?free-search=${Date.now()}`);
+    const meter = { monthUsd:0, calls:0, tavilySearches:0 };
+    const out = await complete({ system:'Find products.', user:'running shoes', search:true,
+      sensitivity:'generic', meter });
+    assert.equal(out.ok, true);
+    assert.equal(out.provider, 'openrouter');
+    assert.equal(out.sources[0].url, 'https://shop.example/shoe');
+    assert.equal(calls[0].body.search_depth, 'basic');
+    assert.equal(calls[1].body.model.endsWith(':free'), true);
+    assert.equal(meter.tavilySearches, 1);
+    assert.equal(meter.openRouterDaily.calls, 1);
+  } finally {
+    global.fetch = oldFetch;
+    for (const k of names) old[k] == null ? delete process.env[k] : process.env[k] = old[k];
+  }
+});
+
+test('zero-spend mode blocks paid OpenRouter models before any request', async () => {
+  const names = ['OPENROUTER_API_KEY','OPENROUTER_MODEL','LLM_PROVIDER','ZERO_SPEND_MODE'];
+  const old = Object.fromEntries(names.map(k => [k, process.env[k]]));
+  Object.assign(process.env, { OPENROUTER_API_KEY:'or-test', OPENROUTER_MODEL:'openai/gpt-5',
+    LLM_PROVIDER:'openrouter', ZERO_SPEND_MODE:'1' });
+  try {
+    const { complete, providerInfo } = await import(`../verafi/llm.js?paid-block=${Date.now()}`);
+    assert.equal(providerInfo().available, false);
+    const out = await complete({ system:'x', user:'y', sensitivity:'generic' });
+    assert.equal(out.ok, false);
+    assert.equal(out.reason, 'no_api_key');
+  } finally {
+    for (const k of names) old[k] == null ? delete process.env[k] : process.env[k] = old[k];
+  }
+});
