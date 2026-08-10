@@ -401,7 +401,7 @@ const ROUTES = {
   'GET /api/hunts': async () => ({
     hunts: (D.hunts ?? []).map(h => ({ ...h, summary: describeRule(h) })),
     sources: [{ key: SOURCE.OWN_HISTORY, label: 'Watch my own purchases', cost: 'free' },
-              { key: SOURCE.WEB, label: 'Search the web', cost: 'needs an API key' }]
+              { key: SOURCE.WEB, label: 'Search the web', cost: 'needs an LLM provider configured' }]
   }),
   'POST /api/hunts': async (b) => {
     try {
@@ -422,7 +422,7 @@ const ROUTES = {
     const h = (D.hunts ?? []).find(x => x.id === b.id);
     if (!h) return { status:404, error:'not found' };
     const run = store.startRun('hunt: ' + h.name);
-    const out = await runRule({ rule: h, store, apiKey: process.env.ANTHROPIC_API_KEY });
+    const out = await runRule({ rule: h, store });
     store.step(run, 'hunt.evaluate', { ceiling: h.ceilingCents, traits: h.traits },
       { matches: out.matches.length, why: out.why });
     store.finishRun(run);
@@ -454,7 +454,6 @@ const ROUTES = {
       const month = new Date().toISOString().slice(0,7);
       D.meter ??= {}; D.meter[month] ??= { monthUsd: 0, queries: 0, cache: {} };
       const out = await researchDeal({ query: b.query, tx: store.tx(),
-                                       apiKey: process.env.ANTHROPIC_API_KEY,
                                        meter: D.meter[month] });
       store.save();
       store.step(run, 'research.deal', { query: b.query }, { ok: out.ok, sources: (out.sources||[]).length });
@@ -496,7 +495,7 @@ const ROUTES = {
   /** Let the model classify everything our rules could not place. Cached forever. */
   'POST /api/autocategorise': async () => {
     if (!hasLLM()) return { status:400, ok:false,
-      error:'Needs ANTHROPIC_API_KEY. Add it to /etc/verafi.env and restart.' };
+      error:'Needs an LLM provider configured. Add ANTHROPIC_API_KEY, GROQ_API_KEY or GEMINI_API_KEY to /etc/verafi.env and restart.' };
     const unknowns = unknownMerchants(expensesOnly(store.tx()), 40);
     if (!unknowns.length) return { ok:true, learned:0, note:'nothing left uncategorised' };
     const tax = Object.entries(TAXONOMY).map(([k,v]) => ({ key:k, subs:v.subs }));
@@ -639,7 +638,7 @@ async function scheduled() {
     // Hunts run on the same daily beat. Matches land in the Spend queue for approval.
     for (const h of dueRules(D.hunts)) {
       try {
-        const out = await runRule({ rule: h, store, apiKey: process.env.ANTHROPIC_API_KEY });
+        const out = await runRule({ rule: h, store });
         if (out.matches?.length) await notify({
           title: `Verafi found a match: ${h.name}`,
           lines: out.matches.map(m => `${m.title} — $${Math.round(m.foundPriceCents/100)}`),
@@ -666,7 +665,7 @@ setInterval(async () => {
     // Hunts run on the same daily beat. Matches land in the Spend queue for approval.
     for (const h of dueRules(D.hunts)) {
       try {
-        const out = await runRule({ rule: h, store, apiKey: process.env.ANTHROPIC_API_KEY });
+        const out = await runRule({ rule: h, store });
         if (out.matches?.length) await notify({
           title: `Verafi found a match: ${h.name}`,
           lines: out.matches.map(m => `${m.title} — $${Math.round(m.foundPriceCents/100)}`),

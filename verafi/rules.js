@@ -12,12 +12,13 @@
  */
 import { expensesOnly } from './classify.js';
 import { researchDeal, holdDeal, spendingContext } from './deals.js';
+import { hasLLM } from './llm.js';
 
 const DAY = 86400000;
 const f0 = c => '$' + Math.round(c/100).toLocaleString('en-US');
 
 export const SOURCE = Object.freeze({
-  WEB: 'web',              // searches the internet — needs an API key
+  WEB: 'web',              // searches the internet — needs a configured LLM provider
   OWN_HISTORY: 'history'   // watches your own repeat purchases — free, always works
 });
 
@@ -71,7 +72,7 @@ export function evaluateHistoryHunt(rule, tx, now = Date.now()) {
     const n = (t.merchantName ?? t.merchantId ?? '').toLowerCase();
     return term.some(w => n.includes(w));
   });
-  if (hits.length < 3) return { matched: false, why: `only ${hits.length} past purchases match “${rule.name}” — need 3 to learn a normal price` };
+  if (hits.length < 3) return { matched: false, why: `only ${hits.length} past purchases match "${rule.name}" — need 3 to learn a normal price` };
 
   const prices = hits.map(h => h.amountCents).sort((a,b)=>a-b);
   const median = prices[Math.floor(prices.length/2)];
@@ -91,8 +92,15 @@ export function evaluateHistoryHunt(rule, tx, now = Date.now()) {
   };
 }
 
-/** Run one hunt. Returns matches; never purchases. */
-export async function runRule({ rule, store, apiKey, now = Date.now() }) {
+/**
+ * Run one hunt. Returns matches; never purchases.
+ *
+ * No apiKey argument — whether a web hunt can run at all is decided by hasLLM() /
+ * providerInfo() inside deals.js's researchDeal(), which reflects whatever provider is
+ * actually configured (Anthropic, Groq, Gemini, ...). Passing a raw ANTHROPIC_API_KEY
+ * here used to silently disable web hunts the moment a different provider was set up.
+ */
+export async function runRule({ rule, store, now = Date.now() }) {
   const tx = store.tx();
   rule.lastRunAt = now; rule.runs++;
 
@@ -107,10 +115,10 @@ export async function runRule({ rule, store, apiKey, now = Date.now() }) {
     return { matches: [item], why: r.detail, evidence: r.evidence };
   }
 
-  if (!apiKey) return { matches: [], needsKey: true,
-    why: 'This hunt searches the web, which needs an ANTHROPIC_API_KEY. Switch it to “watch my own purchases” to run for free.' };
+  if (!hasLLM()) return { matches: [], needsKey: true,
+    why: 'This hunt searches the web, which needs an LLM provider configured (Anthropic or Gemini). Switch it to "watch my own purchases" to run for free.' };
 
-  const out = await researchDeal({ query: buildQuery(rule), tx, apiKey });
+  const out = await researchDeal({ query: buildQuery(rule), tx });
   if (!out.ok) return { matches: [], why: out.answer };
 
   // The model returns prose; we do not let it decide what counts as a match. The ceiling

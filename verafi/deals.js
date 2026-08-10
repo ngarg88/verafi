@@ -4,9 +4,9 @@
  * This is the one kind of question that CANNOT be answered from your transaction history.
  * It needs live prices from the outside world. Two honest options:
  *
- *   1. With an ANTHROPIC_API_KEY set, this uses Claude with web search to research real
- *      current options and grounds the budget advice in YOUR spending.
- *   2. Without a key, it refuses rather than inventing plausible-looking prices. A made-up
+ *   1. With a search-capable provider configured (Anthropic, or Gemini via GEMINI_API_KEY),
+ *      this researches real current options and grounds the budget advice in YOUR spending.
+ *   2. Without one, it refuses rather than inventing plausible-looking prices. A made-up
  *      hotel rate is worse than no answer.
  *
  * Capability: recommend. It researches and hands you links. It never books, never pays.
@@ -29,6 +29,7 @@ import { complete, providerInfo } from './llm.js';
  * At 20 queries/user/month that is ~$1.00/user/month of COGS.
  * On a $12/month subscription: ~8% — healthy, IF capped.
  * The daily agents cost nothing at all: they are deterministic and never call a model.
+ * (Gemini's free tier has no per-call dollar cost, but is still metered by call count.)
  */
 export const COST = Object.freeze({
   perSearchUsd: 0.01,
@@ -171,11 +172,18 @@ export function spendingContext(tx, now = Date.now()) {
 }
 
 /**
- * Ask Claude to research it, with web search, constrained to the user's real budget.
- * Returns a structured answer or an honest refusal.
+ * Ask the active provider to research it, with web search, constrained to the user's
+ * real budget. Returns a structured answer or an honest refusal.
+ *
+ * Deliberately takes no apiKey argument — the active provider and its capabilities
+ * (available? can it search the web? does it train on data?) all come from llm.js's
+ * providerInfo(), which is the single source of truth for what is configured. A
+ * previous version of this function checked a passed-in ANTHROPIC_API_KEY directly,
+ * which meant it silently ignored Groq/Gemini/etc once those were added.
  */
-export async function researchDeal({ query, tx, apiKey, model = 'claude-sonnet-5', meter }) {
+export async function researchDeal({ query, tx, model = 'claude-sonnet-5', meter }) {
   const ctx = spendingContext(tx);
+  const info = providerInfo();
 
   // Cap before spending, not after. Consumer apps die on unmetered inference.
   if (meter && meter.monthUsd >= COST.monthlyCapUsd) return {
@@ -191,19 +199,28 @@ export async function researchDeal({ query, tx, apiKey, model = 'claude-sonnet-5
     return { ...meter.cache[cacheKey].result, cached: true };
   }
 
-  if (!apiKey) return {
+  if (!info.available) return {
     ok: false,
-    answer: 'Deal research needs live prices from the web, and no API key is configured — so I won\'t guess. Anything I made up here would look convincing and be wrong.',
+    answer: 'Deal research needs live prices from the web, and no LLM provider is configured — so I won\'t guess. Anything I made up here would look convincing and be wrong.',
     howToFix: [
-      'Get a key at console.anthropic.com (pay-as-you-go, a query like this costs a cent or two)',
-      'On the server:  sudo nano /etc/verafi.env',
-      'Add:  ANTHROPIC_API_KEY=sk-ant-...',
+      'Free option: get a key at aistudio.google.com/apikey',
+      'On the server:  echo "GEMINI_API_KEY=AIza..." | sudo tee -a /etc/verafi.env',
       'Then: sudo systemctl restart verafi'
     ],
     context: ctx
   };
 
-  const info = providerInfo();
+  if (!info.canSearchWeb) return {
+    ok: false,
+    answer: `Deal research needs live web search. Your active provider (${info.provider}) doesn't support it — it's used for other reasoning instead. Add a search-capable provider to enable this.`,
+    howToFix: [
+      'Free option: get a key at aistudio.google.com/apikey',
+      'On the server:  echo "GEMINI_API_KEY=AIza..." | sudo tee -a /etc/verafi.env',
+      'Then: sudo systemctl restart verafi'
+    ],
+    context: ctx
+  };
+
   // On a provider that trains on prompts, send the budget number and nothing else about
   // this person. A hotel search does not need to know their monthly spend.
   const safeContext = info.allowPersonal ? ctx.summary
