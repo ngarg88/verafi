@@ -17,17 +17,19 @@
 /**
  * PROVIDERS
  *
- * Two are supported. The difference that matters is not price, it is what happens to
- * your data:
+ * Several are supported. Two things vary between them, and both matter:
  *
- *   anthropic  paid. API prompts are not used for training.
- *   gemini     free tier. Google may use prompts to improve their products, and human
- *              reviewers may annotate them. Their paid tier does not.
+ *   1. Does it train on your prompts? (trainsOnYourData)
+ *   2. Can it search the live web? (noSearch)
  *
- * So free Gemini is fine for "find me a hotel under $2,800" and NOT fine for "here are
- * 40 merchants I spend money at, categorise them". Every call site declares whether it
- * carries personal data, and personal calls are refused on an untrusted provider unless
- * you explicitly opt in.
+ * Groq/Cerebras/Ollama never train on your data but also cannot search the web at all —
+ * they are pure reasoning over data you already gave them (findings, categorisation).
+ * Gemini's free tier CAN search the web but may train on prompts, which is why deal
+ * research strips personal financial detail before sending anything to it.
+ *
+ * Provider selection is therefore capability-aware, not just priority-ordered: a call
+ * that needs web search (deal research) must land on a provider that can actually do
+ * that, even if a different provider is preferred for everything else.
  */
 const API = 'https://api.anthropic.com/v1/messages';
 
@@ -99,18 +101,35 @@ export function providerOptions() {
   ];
 }
 
-function activeProvider() {
+/**
+ * Pick the active provider. When `search` is true, a provider that cannot search the
+ * web is not a valid candidate at all — not "less preferred", genuinely unusable for
+ * this call — so it is skipped even if it would normally win on priority.
+ */
+function activeProvider({ search = false } = {}) {
+  const usable = (p) => PROVIDERS[p].key() && !(search && PROVIDERS[p].noSearch);
+
   const want = (process.env.LLM_PROVIDER ?? '').toLowerCase();
-  if (want && PROVIDERS[want]?.key()) return want;
-  // Prefer providers that do not train on your data.
-  for (const p of ['anthropic','groq','cerebras','ollama','gemini','openrouter'])
-    if (PROVIDERS[p].key()) return p;
+  if (want && PROVIDERS[want] && usable(want)) return want;
+
+  // Prefer providers that do not train on your data, but only among ones that can
+  // actually do what's being asked.
+  const order = search
+    ? ['anthropic', 'gemini']                                        // only these can search
+    : ['anthropic', 'groq', 'cerebras', 'ollama', 'gemini', 'openrouter'];
+  for (const p of order) if (usable(p)) return p;
   return null;
 }
 
-export function providerInfo() {
-  const p = activeProvider();
-  if (!p) return { provider: null, available: false };
+/**
+ * @param {{ search?: boolean }} opts - pass { search: true } when the caller needs a
+ * provider capable of live web search (e.g. deal research). Without this, provider
+ * selection ignores search capability entirely and can hand back a provider (Groq,
+ * Cerebras, ...) that will always refuse a search request.
+ */
+export function providerInfo({ search = false } = {}) {
+  const p = activeProvider({ search });
+  if (!p) return { provider: null, available: false, canSearchWeb: false };
   const trains = typeof PROVIDERS[p].trainsOnYourData === 'function'
     ? PROVIDERS[p].trainsOnYourData() : PROVIDERS[p].trainsOnYourData;
   return { provider: p, available: true, model: PROVIDERS[p].model(), trainsOnYourData: trains,
@@ -123,8 +142,11 @@ export function hasLLM() { return !!activeProvider(); }
 /** Low-level call with usage accounting. Never throws — returns {ok:false} instead. */
 export async function complete({ system, user, maxTokens = 1200, json = false, meter,
                                  sensitivity = 'personal', search = false }) {
-  const info = providerInfo();
-  if (!info.available) return { ok: false, reason: 'no_api_key' };
+  const info = providerInfo({ search });
+  if (!info.available) return {
+    ok: false,
+    reason: search ? 'no_search_provider' : 'no_api_key'
+  };
 
   // The guard that matters: never send someone's finances to a provider that trains on it.
   if (sensitivity === 'personal' && !info.allowPersonal) return {

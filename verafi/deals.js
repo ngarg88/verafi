@@ -183,7 +183,10 @@ export function spendingContext(tx, now = Date.now()) {
  */
 export async function researchDeal({ query, tx, model = 'claude-sonnet-5', meter }) {
   const ctx = spendingContext(tx);
-  const info = providerInfo();
+  // search: true — this call needs a provider that can actually reach the live web.
+  // Without this flag, provider selection ignores that requirement and can hand back
+  // a provider (Groq, Cerebras, ...) that will always refuse a search request.
+  const info = providerInfo({ search: true });
 
   // Cap before spending, not after. Consumer apps die on unmetered inference.
   if (meter && meter.monthUsd >= COST.monthlyCapUsd) return {
@@ -199,20 +202,12 @@ export async function researchDeal({ query, tx, model = 'claude-sonnet-5', meter
     return { ...meter.cache[cacheKey].result, cached: true };
   }
 
+  // providerInfo({ search: true }) only ever returns a provider that can reach the live
+  // web (currently: Anthropic or Gemini). If none is configured, this is unavailable
+  // regardless of whether a non-search provider like Groq is active for everything else.
   if (!info.available) return {
     ok: false,
-    answer: 'Deal research needs live prices from the web, and no LLM provider is configured — so I won\'t guess. Anything I made up here would look convincing and be wrong.',
-    howToFix: [
-      'Free option: get a key at aistudio.google.com/apikey',
-      'On the server:  echo "GEMINI_API_KEY=AIza..." | sudo tee -a /etc/verafi.env',
-      'Then: sudo systemctl restart verafi'
-    ],
-    context: ctx
-  };
-
-  if (!info.canSearchWeb) return {
-    ok: false,
-    answer: `Deal research needs live web search. Your active provider (${info.provider}) doesn't support it — it's used for other reasoning instead. Add a search-capable provider to enable this.`,
+    answer: 'Deal research needs live web search, and no search-capable provider is configured — so I won\'t guess. Anything I made up here would look convincing and be wrong.',
     howToFix: [
       'Free option: get a key at aistudio.google.com/apikey',
       'On the server:  echo "GEMINI_API_KEY=AIza..." | sudo tee -a /etc/verafi.env',
