@@ -22,7 +22,7 @@ import { VERSION, BUILT, FEATURES } from './version.js';
 import { RESEARCH, ask as askResearch } from './research.js';
 import { isDealQuery, researchDeal, spendingContext, COST, dealPresets, holdDeal, approvalSummary } from './deals.js';
 import { makeRule, describe as describeRule, runRule, dueRules, SOURCE } from './rules.js';
-import { hasLLM, categoriseMerchants, interpretFindings, monthlyNarrative } from './llm.js';
+import { hasLLM, providerInfo, categoriseMerchants, interpretFindings, monthlyNarrative } from './llm.js';
 
 /** Per-month meter shared by every model call, so one cap covers the whole app. */
 function meterNow() {
@@ -159,7 +159,7 @@ const ROUTES = {
     const signals = tx.length ? deriveSignals(tx) : null;
     return {
       plaidConfigured: !!plaid, plaidEnv: process.env.PLAID_ENV ?? 'sandbox', version: VERSION,
-      llm: hasLLM(), llmSpentUsd: (D.meter?.[new Date().toISOString().slice(0,7)]?.monthUsd) ?? 0,
+      llm: hasLLM(), llmProvider: providerInfo(), llmSpentUsd: (D.meter?.[new Date().toISOString().slice(0,7)]?.monthUsd) ?? 0,
       authRequired: authRequired(), findings: D.findings ?? [],
       linked: !!D.profile.linkedAt, transactions: tx.length,
       connections: D.connections.map(c => ({ id:c.id, institution:c.institution, accounts:c.accounts, linkedAt:c.linkedAt })),
@@ -578,7 +578,8 @@ const ROUTES = {
   'POST /api/reset': async () => { store.reset(); return { reset:true }; },
   'GET /api/runs': async () => ({ runs: D.runs.slice(0, 30) }),
   'GET /api/health': async () => ({ ok:true, version: VERSION, built: BUILT, features: FEATURES,
-     plaid: !!plaid, env: process.env.PLAID_ENV ?? 'sandbox' })
+     plaid: !!plaid, env: process.env.PLAID_ENV ?? 'sandbox',
+     llm: hasLLM(), ...providerInfo() })
 };
 
 const MIME = { '.html':'text/html','.css':'text/css','.js':'text/javascript','.json':'application/json','.svg':'image/svg+xml','.webmanifest':'application/manifest+json' };

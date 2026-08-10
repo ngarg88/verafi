@@ -12,6 +12,7 @@
  * Capability: recommend. It researches and hands you links. It never books, never pays.
  */
 import { expensesOnly } from './classify.js';
+import { complete, providerInfo } from './llm.js';
 
 /**
  * COGS MODEL
@@ -202,57 +203,44 @@ export async function researchDeal({ query, tx, apiKey, model = 'claude-sonnet-5
     context: ctx
   };
 
+  const info = providerInfo();
+  // On a provider that trains on prompts, send the budget number and nothing else about
+  // this person. A hotel search does not need to know their monthly spend.
+  const safeContext = info.allowPersonal ? ctx.summary
+    : 'Budget-conscious shopper. (Personal financial detail withheld from this provider.)';
+
   const system = `You are a research agent inside a personal finance app. You find real, current options and you never book or pay for anything.
 
 Rules:
-- Use web search. Cite the sources you used.
+- Search the web. Cite the sources you used.
 - Give 3 concrete options with real current prices, not ranges you invented.
-- Ground affordability in the user's actual spending, provided below.
+- Ground affordability in the context provided.
 - If you cannot find current prices, say so plainly. Do not estimate.
 - End with what the user should verify themselves before booking.
 
-What we know about this user's finances: ${ctx.summary}.`;
+Context: ${safeContext}.`;
 
-  const body = {
-    model, max_tokens: 2000,
-    system,
-    tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 6 }],
-    messages: [{ role: 'user', content: query }]
+  const out = await complete({
+    system, user: query, maxTokens: 2000, search: true,
+    sensitivity: 'generic',          // the query itself, not their transaction history
+    meter
+  });
+
+  if (!out.ok) return {
+    ok: false, context: ctx,
+    answer: out.reason === 'timeout'
+      ? 'The search took too long and was stopped. Try a narrower question.'
+      : out.reason === 'privacy_blocked' ? out.detail
+      : `Could not reach the research service (${out.reason}${out.detail ? ': ' + out.detail : ''}).`
   };
 
-  // Same hard timeout as every other model call. A slow search must not hang the app.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), Number(process.env.LLM_TIMEOUT_MS ?? 25000));
-  let r, j;
-  try {
-    r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST', signal: ctrl.signal,
-      headers: { 'content-type':'application/json', 'x-api-key': apiKey, 'anthropic-version':'2023-06-01' },
-      body: JSON.stringify(body)
-    });
-    if (!r.ok) {
-      const text = await r.text();
-      return { ok:false, answer:`Research call failed (${r.status}). ${text.slice(0,200)}`, context: ctx };
-    }
-    j = await r.json();
-  } catch (e) {
-    return { ok:false, context: ctx,
-      answer: e.name === 'AbortError'
-        ? 'The search took too long and was stopped. Web research with sources can take a while — try a narrower question, or try again.'
-        : `Could not reach the research service (${e.message}).` };
-  } finally { clearTimeout(timer); }
-  const answer = (j.content ?? []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
-  // Real usage, not an estimate — so the cost number shown to the user is the true one.
-  const searches = (j.content ?? []).filter(c => c.type === 'web_search_tool_result').length;
-  const inTok  = j.usage?.input_tokens ?? 0, outTok = j.usage?.output_tokens ?? 0;
-  const costUsd = searches * COST.perSearchUsd + (inTok/1e6)*3 + (outTok/1e6)*15;
-  const sources = [];
-  for (const c of j.content ?? []) {
-    if (c.type === 'web_search_tool_result') for (const s of c.content ?? []) if (s.url) sources.push({ url:s.url, title:s.title });
-  }
+  const answer = out.text;
+  const sources = out.sources ?? [];
+  const costUsd = out.costUsd ?? 0;
+
   const result = {
-    ok: true, answer, sources, context: ctx,
-    costUsd: +costUsd.toFixed(4), searches,
+    ok: true, answer, sources, context: ctx, provider: out.provider,
+    costUsd: +costUsd.toFixed(4),
     disclaimer: 'Research only. This agent cannot book or pay for anything.'
   };
   if (meter) {
