@@ -62,7 +62,19 @@ jobs:
               *) echo "DATA_DIR must be an absolute path" >&2; exit 1 ;;
             esac
           else
-            data_dir="$app_dir/verafi/data"
+            data_files=()
+            for search_root in /var/lib/verafi /home/ubuntu/verafi-data "$app_dir"; do
+              if sudo test -d "$search_root"; then
+                while IFS= read -r data_file; do
+                  data_files+=("$data_file")
+                done < <(sudo find "$search_root" -maxdepth 5 -type f -name verafi.json -print)
+              fi
+            done
+            if [ "${#data_files[@]}" -ne 1 ]; then
+              echo "Expected exactly one Verafi data file; found ${#data_files[@]}" >&2
+              exit 1
+            fi
+            data_dir="$(dirname "${data_files[0]}")"
           fi
 
           if [ -n "$configured_statements_dir" ]; then
