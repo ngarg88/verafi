@@ -35,7 +35,7 @@ No actionable P0, P1, or P2 differences remain.
 - No P0/P1/P2 differences found.
 - Save to Spend was tested through its visible success state.
 - Compare all was tested through the complete side-by-side state and return navigation.
-- Price Watch exposed its target-price prompt; its server payload and quota-safe hunt endpoint remain covered by the existing action architecture.
+- Price Watch now uses an in-app percentage-trigger sheet rather than a native prompt. The baseline, trigger price, and buy/wait decision are visible before monitoring starts.
 - Visit Seller is enabled only for validated HTTP(S) URLs and opens merchant checkout outside Verafi.
 - Browser console: no application errors were observed during the final results, comparison, or save flows. A cloud-browser dialog timeout occurred while automating the native prompt itself; it did not reproduce as an application-rendering error.
 
@@ -63,3 +63,18 @@ No actionable P0, P1, or P2 differences remain.
 - [x] Automated render and model-adapter tests
 
 final result: passed
+
+## v20 product rules
+
+These rules came from the Save, Agents, custom-category, and notification rebuild. They are durable product decisions for future work:
+
+- Save is an action queue, not an analytics dashboard. Its primary states are **Needs your decision**, **In progress**, and **Savings confirmed**.
+- Potential savings are never added to confirmed savings until the user marks the action complete.
+- Every Save decision names the responsible agent, evidence status, dollar status, and direct next action.
+- Spending categories and transaction drill-downs belong in Spend, not Save. Forecast content must not compete with the Save decision queue.
+- Each financial agent must expose what it checked, candidate/confirmed/review counts, evidence, and its next investigation step.
+- User-created shopping categories do not depend on transaction history. They retain purpose, household context, budget, and a default price-drop threshold.
+- Price alerts use a baseline plus a percentage trigger. The UI shows the calculated target before activation.
+- Buy/wait status is calculated from verified prices and the user's trigger. The reasoning model may explain evidence but cannot override the numerical threshold.
+- Repeated alerts are suppressed unless the agent finds an equal-or-better qualifying price.
+- Visual screenshot QA for the v20 screens is still required; the cloud browser was unavailable during the implementation pass.
