@@ -1,0 +1,77 @@
+name: Deploy Verafi to OCI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verafi-production
+  cancel-in-progress: false
+
+jobs:
+  test-and-deploy:
+    runs-on: [self-hosted, linux, x64, verafi, oci, production]
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@v4
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run tests
+        run: npm test
+
+      - name: Deploy atomically and verify health
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_dir=/home/ubuntu/verafi-app
+          data_dir=/home/ubuntu/verafi-data
+          release_dir="/home/ubuntu/verafi-release-${GITHUB_SHA}"
+          backup_dir="/home/ubuntu/verafi-backup-${GITHUB_RUN_ID}"
+
+          test -f /etc/verafi.env
+          test -d "$data_dir"
+          test -d "$app_dir"
+
+          rm -rf "$release_dir"
+          mkdir -p "$release_dir"
+          cp -a packages verafi package.json "$release_dir/"
+
+          rollback() {
+            sudo systemctl stop verafi || true
+            if [ -d "$backup_dir" ]; then
+              rm -rf "$app_dir"
+              mv "$backup_dir" "$app_dir"
+              sudo systemctl start verafi
+            fi
+          }
+          trap rollback ERR
+
+          sudo systemctl stop verafi
+          mv "$app_dir" "$backup_dir"
+          mv "$release_dir" "$app_dir"
+          sudo systemctl start verafi
+
+          healthy=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if sudo systemctl is-active --quiet verafi && curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8788/ >/dev/null; then
+              healthy=true
+              break
+            fi
+            sleep 2
+          done
+          test "$healthy" = true
+
+          trap - ERR
+          rm -rf "$backup_dir"
+          sudo systemctl --no-pager --full status verafi

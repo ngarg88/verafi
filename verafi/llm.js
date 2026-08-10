@@ -34,6 +34,12 @@
 const API = 'https://api.anthropic.com/v1/messages';
 
 const PROVIDERS = {
+  openai: {
+    key: () => process.env.OPENAI_API_KEY,
+    model: () => process.env.OPENAI_MODEL ?? 'gpt-5.5',
+    trainsOnYourData: false,
+    style: 'openai-responses'
+  },
   anthropic: {
     key: () => process.env.ANTHROPIC_API_KEY,
     model: () => process.env.LLM_MODEL ?? 'claude-sonnet-5',
@@ -86,6 +92,8 @@ const PROVIDERS = {
 
 export function providerOptions() {
   return [
+    { key:'openai', label:'OpenAI', cost:'usage based', private:true, search:true,
+      note:'Live product research through the Responses API web search tool.' },
     { key:'anthropic', label:'Anthropic', cost:'~$1-3/mo', private:true,  search:true,
       note:'Best quality. Prompts are not used for training.' },
     { key:'gemini', label:'Google Gemini', cost:'free', private:false, search:true,
@@ -115,8 +123,8 @@ function activeProvider({ search = false } = {}) {
   // Prefer providers that do not train on your data, but only among ones that can
   // actually do what's being asked.
   const order = search
-    ? ['anthropic', 'gemini']                                        // only these can search
-    : ['anthropic', 'groq', 'cerebras', 'ollama', 'gemini', 'openrouter'];
+    ? ['openai', 'anthropic', 'gemini']
+    : ['openai', 'anthropic', 'groq', 'cerebras', 'ollama', 'gemini', 'openrouter'];
   for (const p of order) if (usable(p)) return p;
   return null;
 }
@@ -166,6 +174,33 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
 
   // One adapter for every OpenAI-compatible provider: groq, cerebras, openrouter, ollama.
   const cfg = PROVIDERS[info.provider];
+  if (cfg.style === 'openai-responses') {
+    try {
+      const r = await fetch('https://api.openai.com/v1/responses', {
+        method:'POST', signal: ctrl.signal,
+        headers: { 'content-type':'application/json', authorization:`Bearer ${key}` },
+        body: JSON.stringify({ model:info.model, instructions:system, input:user,
+          max_output_tokens:maxTokens, ...(search ? { tools:[{ type:'web_search' }] } : {}) })
+      });
+      if (!r.ok) return { ok:false, reason:`http_${r.status}`, detail:(await r.text()).slice(0,300) };
+      const j = await r.json();
+      const messages = (j.output ?? []).filter(x => x.type === 'message');
+      let text = messages.flatMap(x => x.content ?? []).filter(x => x.type === 'output_text')
+        .map(x => x.text ?? '').join('\n').trim();
+      const sources = [];
+      for (const part of messages.flatMap(x => x.content ?? [])) for (const a of part.annotations ?? []) {
+        const c = a.url_citation ?? a;
+        if (c.url && !sources.some(s => s.url === c.url)) sources.push({ url:c.url, title:c.title });
+      }
+      if (json && !text.startsWith('[')) { const i=text.indexOf('['); if (i>=0) text=text.slice(i); }
+      const cost=(j.usage?.input_tokens??0)/1e6*2+(j.usage?.output_tokens??0)/1e6*8;
+      if (meter) { meter.monthUsd=+((meter.monthUsd??0)+cost).toFixed(4); meter.calls=(meter.calls??0)+1; }
+      return { ok:true, text, costUsd:+cost.toFixed(5), provider:'openai', sources };
+    } catch (e) {
+      return { ok:false, reason:e.name==='AbortError'?'timeout':'network', detail:e.message };
+    } finally { clearTimeout(timer); }
+  }
+
   if (cfg.style === 'openai') {
     try {
       const base = typeof cfg.base === 'function' ? cfg.base() : cfg.base;

@@ -144,7 +144,7 @@ function viewShop() {
   ${BRAND()}
   <div class="top"><h1>Shop</h1><span class="sp"></span>
     <button class="chipbtn" onclick="S.tab='settings';render()">⚙</button></div>
-  <div class="tiny muted">Agents that find things worth buying — priced against what you actually spend.</div>
+  <div class="tiny muted">Ask for anything, then compare live options, tradeoffs and sources.</div>
 
   <div class="card">
     <input id="q" placeholder="all-inclusive to the Bahamas, Labor Day, 2 adults 2 kids"
@@ -157,7 +157,7 @@ function viewShop() {
       <b style="color:var(--ink)">${watch.length} item${watch.length>1?'s':''} waiting in Spend</b> for you to review and buy.</span>
       <span class="muted">›</span></div></div>` : ''}
 
-  <div class="sec"><span class="lbl">Standing hunts</span>
+  <div class="sec"><span class="lbl">Price watches</span>
     <button class="act" onclick="newHunt()">+ new</button></div>
   ${(S.hunts ?? []).length ? S.hunts.map(h=>`
     <div class="card" style="${h.enabled?'':'opacity:.6'}">
@@ -175,7 +175,7 @@ function viewShop() {
         <button class="btn ghost" style="width:auto;padding:13px 16px" onclick="deleteHunt('${h.id}')">✕</button>
       </div>
     </div>`).join('')
-   : `<div class="card"><div class="tiny muted" style="line-height:1.6">No standing hunts. A hunt is a hard ceiling plus what you require — <b style="color:var(--ink)">"all-inclusive Bahamas, nonstop, 4 nights, 2 adults 2 kids, under $2,800"</b>. The agent checks daily and drops matches into Spend. It can never buy.</div></div>`}
+   : `<div class="card"><div class="tiny muted" style="line-height:1.6">No price watches yet. Set a maximum price and your requirements; Verafi checks daily and puts matching options in Spend for your review.</div></div>`}
 
   <div class="sec"><span class="lbl">Your categories</span><span class="act">by what you spend</span></div>
   ${cats.map(c=>`
@@ -242,7 +242,7 @@ async function holdFromAnswer() {
   await load();
 }
 async function newHunt() {
-  const name = prompt('What are you hunting for?\ne.g. all-inclusive Bahamas');
+  const name = prompt('What should Verafi watch for?\ne.g. all-inclusive Bahamas');
   if (!name) return;
   const ceiling = prompt('Hard ceiling in dollars (never exceeded):');
   if (!ceiling) return;
@@ -256,15 +256,15 @@ async function newHunt() {
   } catch (e) { S.error = e.message; render(); }
 }
 async function toggleHunt(id, enabled) { await api('/api/hunts/toggle', { id, enabled }); await load(); }
-async function deleteHunt(id) { if (confirm('Delete this hunt?')) { await api('/api/hunts/delete', { id }); await load(); } }
+async function deleteHunt(id) { if (confirm('Delete this price watch?')) { await api('/api/hunts/delete', { id }); await load(); } }
 async function runHunt(id) {
   S.busy = true; render();
   try {
     const r = await api('/api/hunts/run', { id });
-    S.answer = { label:'Hunt result', answer: r.why ?? r.answer ?? (r.matches.length?`Found ${r.matches.length} match — it's in Spend.`:'No match yet.'),
+    S.answer = { label:'Price watch result', answer: r.why ?? r.answer ?? (r.matches.length?`Found ${r.matches.length} match — it's in Spend.`:'No match yet.'),
                  evidence: r.evidence ?? (r.sources||[]).map(s=>`${s.title||s.url} — ${s.url}`),
-                 steps:[{tool:'hunt.evaluate',detail:'hard ceiling enforced on parsed prices'}],
-                 disclaimer:'Hunts surface candidates. They cannot buy.', ok:false };
+                 steps:[{tool:'price_watch.evaluate',detail:'maximum price enforced on parsed prices'}],
+                 disclaimer:'Price watches surface candidates. They cannot buy.', ok:false };
     await load();
   } catch (e) { S.error = e.message; }
   S.busy = false; render();
@@ -536,6 +536,11 @@ function viewAgent() {
     <button class="chipbtn" onclick="runAgentsNow()">${S.busy?'<span class="spin"></span>':'↻ run'}</button></div>
   <div class="tiny muted">${(st.agents??[]).filter(a=>a.enabled).length} of ${(st.agents??[]).length} running · every 24h</div>
 
+  ${S.insight?.ok ? `<div class="card" style="border-color:var(--spend)">
+    <div class="tiny muted">Latest agent readout</div>
+    <div style="font-weight:650;font-size:14px;line-height:1.5;margin-top:6px">${esc(S.insight.headline)}</div>
+  </div>` : ''}
+
   <div class="card" style="border-color:var(--save)">
     <div style="font-weight:700;font-size:13.5px">None of these can spend money</div>
     <div class="tiny muted" style="margin-top:5px;line-height:1.6">Every agent here is <b style="color:var(--ink)">observe</b> or <b style="color:var(--ink)">recommend</b>. Spending would require a signed limit and a biometric on your phone — deliberately not built while this is read-only.</div>
@@ -550,7 +555,9 @@ function viewAgent() {
           <div class="row" style="gap:6px"><span style="font-weight:650;font-size:13.5px">${esc(a.name)}</span>
             <span class="badge b-spend">${esc(a.surface)}</span>
             ${mine.length?`<span class="badge b-save">${mine.length} found</span>`:''}</div>
-          <div class="tiny muted" style="margin-top:4px;line-height:1.55">${esc(a.evidence)}</div>
+          <div class="tiny muted" style="margin-top:4px;line-height:1.55">${mine.length
+            ? esc(mine[0].detail ?? mine[0].title)
+            : (a.enabled ? 'No current issue found in your data.' : 'Off — turn on to analyze your data.')}</div>
           <div class="tiny" style="color:var(--dim);margin-top:5px">${CAP[a.capability] ?? a.capability}</div>
         </div>
         <div class="tog ${a.enabled?'on':''}" onclick="toggleAgent('${a.id}',${!a.enabled})"><i></i></div>
@@ -614,7 +621,9 @@ function viewSettings() {
         <div class="grow">
           <div class="row" style="gap:6px"><span style="font-weight:650;font-size:13.5px">${esc(a.name)}</span>
             <span class="badge b-spend">${a.surface}</span></div>
-          <div class="tiny muted" style="margin-top:4px;line-height:1.5">${esc(a.evidence)}</div>
+          <div class="tiny muted" style="margin-top:4px;line-height:1.5">${a.enabled
+            ? 'Analyzes your connected transactions and reports only evidence-backed findings.'
+            : 'Off — no analysis is being run.'}</div>
         </div>
         <div class="tog ${a.enabled?'on':''}" onclick="toggleAgent('${a.id}',${!a.enabled})"><i></i></div>
       </div>
