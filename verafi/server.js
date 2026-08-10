@@ -495,7 +495,7 @@ const ROUTES = {
   /** Let the model classify everything our rules could not place. Cached forever. */
   'POST /api/autocategorise': async () => {
     if (!hasLLM()) return { status:400, ok:false,
-      error:'Needs an LLM provider configured. Add ANTHROPIC_API_KEY, GROQ_API_KEY or GEMINI_API_KEY to /etc/verafi.env and restart.' };
+      error:'Needs an LLM provider configured. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, GROQ_API_KEY or GEMINI_API_KEY to /etc/verafi.env and restart.' };
     const unknowns = unknownMerchants(expensesOnly(store.tx()), 40);
     if (!unknowns.length) return { ok:true, learned:0, note:'nothing left uncategorised' };
     const tax = Object.entries(TAXONOMY).map(([k,v]) => ({ key:k, subs:v.subs }));

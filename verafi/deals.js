@@ -4,7 +4,7 @@
  * This is the one kind of question that CANNOT be answered from your transaction history.
  * It needs live prices from the outside world. Two honest options:
  *
- *   1. With a search-capable provider configured (Anthropic, or Gemini via GEMINI_API_KEY),
+ *   1. With a search-capable provider configured (OpenAI, Anthropic, or Gemini),
  *      this researches real current options and grounds the budget advice in YOUR spending.
  *   2. Without one, it refuses rather than inventing plausible-looking prices. A made-up
  *      hotel rate is worse than no answer.
@@ -203,7 +203,7 @@ export async function researchDeal({ query, tx, model = 'claude-sonnet-5', meter
   }
 
   // providerInfo({ search: true }) only ever returns a provider that can reach the live
-  // web (currently: Anthropic or Gemini). If none is configured, this is unavailable
+  // web (currently: OpenAI, Anthropic or Gemini). If none is configured, this is unavailable
   // regardless of whether a non-search provider like Groq is active for everything else.
   if (!info.available) return {
     ok: false,
