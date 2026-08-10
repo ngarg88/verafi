@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { Store } from './store.js';
 import { Plaid, toCoreTx } from './plaid.js';
 import { importCsv, importOfx } from './importers.js';
-import { runAgents, AGENTS } from './agents.js';
+import { runAgents, reviewAgents, AGENTS } from './agents.js';
 import { expensesOnly, breakdown, classify, FLOW } from './classify.js';
 import { categoriseAll, categorise, TAXONOMY, unknownMerchants } from './categories.js';
 import { VERSION, BUILT, FEATURES } from './version.js';
@@ -37,9 +37,9 @@ function meterNow() {
  * get a plain description until they have something of yours to point at.
  */
 const CATALOG_BLURB = {
-  'Subscription Auditor': 'Watches for anything still billing you that you have stopped using',
+  'Subscription Auditor': 'Builds a complete recurring-charge review queue and asks before claiming waste',
   'Fee Catcher':          'Flags overdraft, ATM and foreign-transaction fees worth disputing',
-  'Duplicate Watch':      'Catches the same merchant charging the same amount twice in a few days',
+  'Duplicate Watch':      'Catches rare same-day, same-amount charges and shows both transactions',
   'Budget Pacer':         'Warns when a category is on pace to run well past your normal',
   'Card Router':          'Tells you which of your cards earns most in each category'
 };
@@ -50,6 +50,44 @@ function seedAgentCatalog(D) {
       surface: a.surface, name: a.label, capability: 'observe', enabled: false,
       custom: false, evidence: CATALOG_BLURB[a.label] ?? a.label, confidence: null });
   }
+}
+
+function dataCoverage() {
+  const tx = store.tx();
+  const expenses = expensesOnly(tx);
+  const dates = tx.map(t=>t.postedAt).filter(Number.isFinite);
+  const perInstrument = D.instruments.map(i => {
+    const rows = tx.filter(t=>t.instrumentId===i.id || t.accountId===i.accountId);
+    const ds = rows.map(t=>t.postedAt).filter(Number.isFinite);
+    return { id:i.id, name:i.displayName, rail:i.rail, transactions:rows.length,
+      oldestAt:ds.length?Math.min(...ds):null, newestAt:ds.length?Math.max(...ds):null,
+      historyDays:ds.length?Math.max(1,Math.round((Math.max(...ds)-Math.min(...ds))/86400000)):0 };
+  });
+  const categories = categoriseAll(expenses, D.learned);
+  return {
+    transactions:tx.length, expenses:expenses.length, accounts:D.instruments.length,
+    cards:D.instruments.filter(i=>i.rail==='card_credit').length,
+    oldestAt:dates.length?Math.min(...dates):null, newestAt:dates.length?Math.max(...dates):null,
+    historyDays:dates.length?Math.max(1,Math.round((Math.max(...dates)-Math.min(...dates))/86400000)):0,
+    categorisedPct:+(100-(categories.find(c=>c.key==='other')?.share??0)).toFixed(1),
+    perInstrument,
+    historicalSyncPending:D.connections.some(c=>c.transactionsUpdateStatus && c.transactionsUpdateStatus!=='HISTORICAL_UPDATE_COMPLETE'),
+    legacyConnections:D.connections.filter(c=>!c.historyDaysRequested).length
+  };
+}
+
+function applyPlaidUpdates({ added=[], modified=[], removed=[] }, byAccount) {
+  const replaceIds = new Set(modified.map(t=>t.transaction_id));
+  const removeIds = new Set(removed.map(t=>t.transaction_id));
+  const existing = new Set(D.transactions.map(t=>t.externalId));
+  D.transactions = D.transactions.filter(t=>!replaceIds.has(t.externalId)&&!removeIds.has(t.externalId));
+  for (const raw of [...added,...modified]) {
+    if (existing.has(raw.transaction_id) && !replaceIds.has(raw.transaction_id)) continue;
+    D.transactions.push(toCoreTx(raw,byAccount));
+  }
+  D.transactions.sort((a,b)=>b.postedAt-a.postedAt);
+  return { added:added.filter(t=>!existing.has(t.transaction_id)).length,
+    modified:modified.length, removed:removed.length };
 }
 import { notify } from './notify.js';
 import { authRequired, checkPasscode, issueCookie, verifyCookie, cookieFrom, setCookieHeader } from './auth.js';
@@ -164,6 +202,7 @@ const ROUTES = {
       linked: !!D.profile.linkedAt, transactions: tx.length,
       connections: D.connections.map(c => ({ id:c.id, institution:c.institution, accounts:c.accounts, linkedAt:c.linkedAt })),
       instruments: D.instruments, agents: D.agents, signals,
+      coverage:dataCoverage(), agentReview:reviewAgents({ data:D, cardRules:CARD_RULES }),
       savings: { verifiedTotalCents: verifiedTotalCents(D.savings), events: D.savings.slice(0, 30) },
       mandate: ensureRootMandate(), runs: D.runs.slice(0, 12).map(r => ({ ...r, steps: r.steps.length }))
     };
@@ -199,13 +238,13 @@ const ROUTES = {
       D.instruments.push(inst); byAccount[a.account_id] = inst.id;
     }
 
-    const { added, cursor } = await plaid.syncAll(ex.access_token);
+    const update = await plaid.syncAll(ex.access_token);
+    const { added, cursor, updateStatus } = update;
     D.cursors[conn.id] = cursor;
-    const seen = new Set(store.tx().map(t => t.externalId));
-    const fresh = added.map(t => toCoreTx(t, byAccount)).filter(t => !seen.has(t.externalId));
-    D.transactions.push(...fresh);
-    D.transactions.sort((a,b) => b.postedAt - a.postedAt);
-    store.step(run, 'plaid.transactions.sync', { cursor: !!cursor }, { added: fresh.length });
+    conn.historyDaysRequested = 730;
+    conn.transactionsUpdateStatus = updateStatus;
+    const applied=applyPlaidUpdates(update,byAccount);
+    store.step(run, 'plaid.transactions.sync', { cursor: !!cursor, historyDaysRequested:730 }, applied);
 
     const signals = deriveSignals(store.tx());
     store.step(run, 'profile.derive', { window:'all' }, signals);
@@ -217,19 +256,19 @@ const ROUTES = {
     seedAgentCatalog(D);
     D.profile.linkedAt = Date.now();
     store.finishRun(run);
-    return { linked:true, institution, accounts: conn.accounts.length, transactions: fresh.length, signals, proposed };
+    return { linked:true, institution, accounts: conn.accounts.length, transactions: applied.added, signals, proposed };
   },
 
   'POST /api/refresh': async () => {
     const run = store.startRun('refresh');
     let total = 0;
     for (const c of D.connections) {
-      const { added, cursor } = await plaid.syncAll(c.accessToken, D.cursors[c.id]);
+      const update=await plaid.syncAll(c.accessToken, D.cursors[c.id]);
+      const { cursor, updateStatus } = update;
       D.cursors[c.id] = cursor;
+      c.transactionsUpdateStatus = updateStatus ?? c.transactionsUpdateStatus;
       const byAccount = Object.fromEntries(D.instruments.filter(i => i.connectionId === c.id).map(i => [i.accountId, i.id]));
-      const seen = new Set(store.tx().map(t => t.externalId));
-      const fresh = added.map(t => toCoreTx(t, byAccount)).filter(t => !seen.has(t.externalId));
-      D.transactions.push(...fresh); total += fresh.length;
+      const applied=applyPlaidUpdates(update,byAccount); total += applied.added;
     }
     D.transactions.sort((a,b) => b.postedAt - a.postedAt);
     store.step(run, 'plaid.transactions.sync', {}, { added: total });
@@ -284,7 +323,8 @@ const ROUTES = {
     return {
       verifiedTotalCents: verifiedTotalCents(D.savings),
       events: D.savings,
-      opportunities: all,
+      opportunities: all.filter(f=>!f.reviewOnly),
+      reviewQueue: all.filter(f=>f.reviewOnly),
       recurringAnnualCents, oneOffCents,
       totalAnnualOpportunityCents: recurringAnnualCents,
       agentsEnabled: D.agents.filter(a => a.enabled).length,
@@ -462,7 +502,7 @@ const ROUTES = {
                steps:[{tool:'context.load',detail:out.context.summary},
                       {tool:'web.search',detail: out.ok ? `${(out.sources||[]).length} sources` : 'unavailable'}],
                answer: out.answer, evidence: (out.sources||[]).map(s=>`${s.title||s.url} — ${s.url}`),
-               decision: out.decision,
+               decision: out.decision, personalContext: out.personalContext,
                howToFix: out.howToFix, ok: out.ok, cached: out.cached, capped: out.capped,
                costUsd: out.costUsd,
                meter: { spentUsd: D.meter[month].monthUsd, queries: D.meter[month].queries,
@@ -628,11 +668,12 @@ async function scheduled() {
   try {
     if (plaid && D.connections.length) {
       for (const c of D.connections) {
-        const { added, cursor } = await plaid.syncAll(c.accessToken, D.cursors[c.id]);
+        const update=await plaid.syncAll(c.accessToken, D.cursors[c.id]);
+        const { cursor, updateStatus } = update;
         D.cursors[c.id] = cursor;
         const byAccount = Object.fromEntries(D.instruments.filter(i => i.connectionId === c.id).map(i => [i.accountId, i.id]));
-        const seen = new Set(D.transactions.map(t => t.externalId));
-        D.transactions.push(...added.map(t => toCoreTx(t, byAccount)).filter(t => !seen.has(t.externalId)));
+        c.transactionsUpdateStatus=updateStatus??c.transactionsUpdateStatus;
+        applyPlaidUpdates(update,byAccount);
       }
       D.transactions.sort((a,b) => b.postedAt - a.postedAt);
     }
@@ -686,8 +727,13 @@ await scanStatements();
 runAgents({ store, cardRules: CARD_RULES });
 
 server.listen(PORT, HOST, () => {
-  const lan = Object.values(networkInterfaces()).flat()
-    .filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);
+  let lan = [];
+  try {
+    lan = Object.values(networkInterfaces()).flat()
+      .filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);
+  } catch (e) {
+    console.warn(`  network address discovery unavailable: ${e.code ?? e.message}`);
+  }
   console.log(`\n  Verafi (personal)  ·  ${process.env.PLAID_ENV ?? 'sandbox'} mode`);
   console.log(`  this machine   http://localhost:${PORT}`);
   lan.forEach(a => console.log(`  your phone     http://${a}:${PORT}   ← same wifi, add to home screen`));

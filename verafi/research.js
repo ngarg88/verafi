@@ -1,5 +1,6 @@
 import { deriveSignals } from '../packages/core/index.js';
 import { expensesOnly } from './classify.js';
+import { normalizeTransactions } from './categories.js';
 
 /**
  * RESEARCH AGENTS — capability level: `recommend`.
@@ -26,9 +27,16 @@ export const RESEARCH = {
       const term = (query||'').toLowerCase().replace(/^(should i buy|buy|get)\s+/,'').trim();
       const hits = tx.filter(t => (t.merchantName||t.merchantId||'').toLowerCase().includes(term) && t.amountCents>0);
       if (!term) return { answer:'Tell me what you\'re thinking of buying — e.g. "should I buy airpods".', evidence:[] };
-      if (!hits.length) return {
-        answer:`You've never bought anything matching “${term}”, so I have no price history of your own to compare against. Worth checking a price-tracking site before you commit.`,
-        evidence:[] };
+      if (!hits.length) {
+        const cat=guessCat(term,tx), related=tx.filter(t=>t.category===cat&&t.amountCents>0);
+        const spent=related.reduce((a,t)=>a+t.amountCents,0);
+        return {
+          answer:related.length
+            ? `I found no exact past purchase matching “${term}”, but I did review ${related.length} related ${cat} transactions totaling ${f0(spent)}. Exact history is optional; ask me to find or compare current options and I will research the live market.`
+            : `I found no exact past purchase matching “${term}”. That limits personal price comparison, but it does not prevent live research—ask me to find or compare current options.`,
+          evidence:related.slice(0,5).map(h=>`${new Date(h.postedAt).toLocaleDateString()} · ${h.merchantName||h.merchantId} · ${fmt(h.amountCents)}`)
+        };
+      }
       const prices = hits.map(h=>h.amountCents).sort((a,b)=>a-b);
       const med = prices[Math.floor(prices.length/2)];
       const last = hits.sort((a,b)=>b.postedAt-a.postedAt)[0];
@@ -187,7 +195,7 @@ export function route(query) {
 }
 
 export function ask({ query, preset, tx: allTx, instruments, cardRules }) {
-  const tx = expensesOnly(allTx);   // research answers about spending, not investing
+  const tx = normalizeTransactions(expensesOnly(allTx));   // one taxonomy across every surface
   const key = preset && RESEARCH[preset] ? preset : route(query);
   const agent = RESEARCH[key];
   const t0 = Date.now();

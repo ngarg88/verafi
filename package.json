@@ -4,7 +4,7 @@
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {
-    "test": "node --test packages/core/test/*.test.js test/llm.test.js && node test/render.test.js && node test/insight.test.js",
+    "test": "node --test packages/core/test/*.test.js test/llm.test.js test/product.test.js && node test/render.test.js && node test/insight.test.js",
     "dev": "node apps/api/server.js",
     "smoke": "node apps/api/smoke.js"
   }

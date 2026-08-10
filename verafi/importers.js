@@ -6,6 +6,7 @@
  * credentials, no vendor, no cost, no signup. Use this to test the whole product today
  * and add Plaid later if you want it to refresh itself.
  */
+import { categorise as classifyMerchant } from './categories.js';
 
 /** Tolerant CSV parser: handles quotes, commas inside quotes, CRLF. */
 export function parseCsv(text) {
@@ -52,6 +53,8 @@ const CATEGORY_RULES = [
   [/transfer|payment thank you|autopay|online payment|zelle|venmo|cash app/i, 'transfer']
 ];
 export function categorise(description) {
+  const rich=classifyMerchant(description);
+  if(rich.category!=='other')return rich.category;
   for (const [re, cat] of CATEGORY_RULES) if (re.test(description)) return cat;
   return 'other';
 }

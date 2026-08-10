@@ -89,7 +89,7 @@ function viewOnboard() {
   return `
   <div class="top"><h1>Verafi</h1><span class="sp"></span>
     <button class="chipbtn" onclick="toggleTheme()">◐</button></div>
-  <p class="muted" style="font-size:14px;line-height:1.6">Connect your accounts and I'll tell you what you're wasting. Your data stays on this machine — the only thing that leaves is the request to your bank.</p>
+  <p class="muted" style="font-size:14px;line-height:1.6">Connect your accounts and Verafi will build a private review of your spending. Transactions stay on this machine. Generic shopping searches may go to your configured search provider; personal financial details remain behind the privacy gate.</p>
 
   <div class="sec"><span class="lbl">Option 1 · live connection</span></div>
   <div class="card">
@@ -218,7 +218,7 @@ function answerCard(r) {
 }
 
 function safeUrl(v) {
-  try { const u = new URL(String(v)); return /^https?:$/.test(u.protocol) ? u.href : ''; }
+  try { const u = new URL(String(v)); return u.protocol==='https:' ? u.href : ''; }
   catch { return ''; }
 }
 function money(v) { return Number(v).toLocaleString('en-US',{style:'currency',currency:'USD'}); }
@@ -247,6 +247,7 @@ function shopDecision(r) {
       <span>${esc(S.lastQuery||'Your search')}</span><button onclick="editShopSearch()">Edit</button></div>
     <div class="source-strip"><div class="source-status"><span></span><b>Researched now</b><em>Checked ${sources.length} live source${sources.length===1?'':'s'} for current prices.</em></div>
       <div class="source-badges">${sources.slice(0,5).map(s=>`<a href="${safeUrl(s.url)}" target="_blank" rel="noopener"><i>${esc(sourceName(s.url,s.title).slice(0,1))}</i>${esc(sourceName(s.url,s.title))}</a>`).join('')}</div></div>
+    ${r.personalContext?`<div class="agent-context"><iconify-icon icon="ph:database-bold"></iconify-icon><span><b>Your history informed the decision</b><small>${esc(r.personalContext.statement)}${r.personalContext.spentYearCents?` · ${$m0(r.personalContext.spentYearCents)} total`:''}${r.personalContext.typicalCents?` · ${$m0(r.personalContext.typicalCents)} typical charge`:''}. History personalizes the answer; it never blocks live research.</small></span></div>`:''}
     <div class="best-intro"><iconify-icon icon="ph:sparkle-fill"></iconify-icon><div><h2>Best match</h2><p>${esc(d.summary)}</p></div></div>
     <div class="product-stack">${products.map((p,i)=>productCard(p,i,selected.has(i))).join('')}</div>
     <button class="compare-all" onclick="openComparison()"><iconify-icon icon="ph:scales-bold"></iconify-icon><span>Compare all ${products.length}<small>See prices, features and tradeoffs side by side</small></span><b>›</b></button>
@@ -267,18 +268,18 @@ function productCard(p,i,isCompared) {
       ${p.tradeoff?`<div class="tradeoff"><b>Tradeoff</b> ${esc(p.tradeoff)}</div>`:''}
     </div>
     <div class="product-actions">
-      ${top?`<button class="save-spend" onclick="saveProduct(${i})"><iconify-icon icon="ph:wallet-bold"></iconify-icon><span>Save to Spend<small>Add to your plan & track price</small></span><b>›</b></button>`:''}
+      ${top?`<button class="save-spend" onclick="visitProduct(${i})" ${url?'':'disabled'}><iconify-icon icon="ph:arrow-square-out-bold"></iconify-icon><span>Buy at ${esc(p.seller)}<small>Open the verified merchant product page</small></span><b>›</b></button>`:''}
       <div class="secondary-actions ${top?'':'four-actions'}"><button class="${isCompared?'selected':''}" onclick="toggleProductCompare(${i})"><iconify-icon icon="ph:scales-bold"></iconify-icon>${isCompared?'Added':'Compare'}</button>
-      ${top?'':`<button onclick="saveProduct(${i})"><iconify-icon icon="ph:wallet-bold"></iconify-icon>Save</button>`}
+      <button onclick="saveProduct(${i})"><iconify-icon icon="ph:wallet-bold"></iconify-icon>Save</button>
       <button onclick="watchProduct(${i})"><iconify-icon icon="ph:bell-bold"></iconify-icon>Watch price</button>
-      <button onclick="visitProduct(${i})" ${url?'':'disabled'}><iconify-icon icon="ph:arrow-square-out-bold"></iconify-icon>Visit seller</button></div>
+      ${top?'':`<button onclick="visitProduct(${i})" ${url?'':'disabled'}><iconify-icon icon="ph:arrow-square-out-bold"></iconify-icon>Buy at seller</button>`}</div>
     </div>
   </article>`;
 }
 function compareDecision(products) {
   return `<section class="shop-results compare-view"><button class="back-result" onclick="S.compareOpen=false;render()">← Results</button>
     <div class="compare-head"><span>Side-by-side</span><h2>Compare your best matches</h2><p>Current prices and the tradeoffs that matter.</p></div>
-    <div class="compare-grid">${products.map((p,i)=>`<article class="compare-card ${i===0?'picked':''}"><span>${esc(p.label)}</span><iconify-icon icon="${productIcon(S.lastQuery)}"></iconify-icon><h3>${esc(p.name)}</h3><strong>${money(p.price)}</strong><small>${esc(p.seller)}</small><ul>${(p.highlights||[]).map(h=>`<li>${esc(h)}</li>`).join('')}</ul><p>${esc(p.tradeoff||p.why)}</p><button onclick="saveProduct(${i})">Save to Spend</button></article>`).join('')}</div>
+    <div class="compare-grid">${products.map((p,i)=>`<article class="compare-card ${i===0?'picked':''}"><span>${esc(p.label)}</span><iconify-icon icon="${productIcon(S.lastQuery)}"></iconify-icon><h3>${esc(p.name)}</h3><strong>${money(p.price)}</strong><small>${esc(p.seller)}</small><ul>${(p.highlights||[]).map(h=>`<li>${esc(h)}</li>`).join('')}</ul><p>${esc(p.tradeoff||p.why)}</p><button onclick="visitProduct(${i})">Buy at ${esc(p.seller)}</button><button class="quiet" onclick="saveProduct(${i})">Save for later</button></article>`).join('')}</div>
     <div class="merchant-guard"><iconify-icon icon="ph:shield-check-bold"></iconify-icon><span><b>Your checkout stays with the merchant.</b><small>Prices and availability can change at checkout.</small></span></div></section>`;
 }
 function decisionProduct(i) { return S.answer?.decision?.products?.[i]; }
@@ -359,11 +360,10 @@ async function runHunt(id) {
 }
 async function dropDeal(id) { await api('/api/deals/drop', { id }); await load(); }
 async function approveDeal(id) {
-  const a = await api('/api/deals/approve', { id });
-  alert(`${a.item.title}\n\nNow ${(a.item.currentPriceCents/100).toFixed(2)}\n${a.affordability}\n` +
-        (a.monthlyImpactPct ? `That is ${a.monthlyImpactPct}% of a typical month.\n\n` : '\n') +
-        a.handoff.why);
-  if (a.item.url) open(a.item.url, '_blank');
+  const item=(S.watchlist??[]).find(x=>x.id===id);
+  const url=safeUrl(item?.url);
+  if(url) open(url,'_blank','noopener');
+  else { S.error='This saved item has no verified merchant link. Search again to get a current product page.'; render(); }
 }
 
 /* ---------------------------------------------------------------- spend */
@@ -408,10 +408,10 @@ function viewSpend() {
   ${BRAND()}
   <div class="top"><h1>Spend</h1><span class="sp"></span>
     <button class="chipbtn" onclick="refresh()">${S.busy?'<span class="spin"></span>':'↻'}</button></div>
-  <div class="tiny muted">What you're about to buy, and what you already do.</div>
+  <div class="tiny muted">Agent-found decisions ready for you, followed by the activity they used.</div>
 
   ${(S.watchlist ?? []).length ? `
-  <div class="sec"><span class="lbl">Ready to review</span><span class="act">${S.watchlist.length} queued</span></div>
+  <div class="sec"><span class="lbl">Ready to act</span><span class="act">${S.watchlist.length} queued</span></div>
   ${S.watchlist.map(w=>{
     const moved = w.foundPriceCents - w.currentPriceCents;
     return `<div class="card" style="border-color:var(--spend)">
@@ -422,11 +422,11 @@ function viewSpend() {
         <div style="text-align:right"><div style="font-weight:700">${$m0(w.currentPriceCents)}</div></div>
       </div>
       <div class="row" style="gap:8px;margin-top:10px">
-        <button class="btn go" onclick="approveDeal('${w.id}')">Review &amp; buy</button>
+        <button class="btn go" onclick="approveDeal('${w.id}')">Buy at merchant</button>
         <button class="btn ghost" style="width:auto;padding:13px 16px" onclick="dropDeal('${w.id}')">Drop</button>
       </div>
     </div>`;}).join('')}
-  <div class="tiny" style="color:var(--dim);margin-top:8px;line-height:1.5">Approving opens the merchant's own checkout — Apple Pay works there and your card never passes through Verafi.</div>
+  <div class="tiny" style="color:var(--dim);margin-top:8px;line-height:1.5">The button opens the verified merchant page immediately. Verafi does not insert a checkout or handle your card.</div>
   ` : `<div class="card"><div class="tiny muted">Nothing queued. Find something in <b style="color:var(--ink)">Shop</b> and hold it — it lands here for review.</div></div>`}
 
   <div class="sec"><span class="lbl">Recent activity</span><span class="act">last 30 days</span></div>
@@ -475,6 +475,20 @@ function viewSave() {
     <div class="tiny muted" style="margin-top:8px">${sv?.events.length ?? 0} recorded · ${$m0(sv?.totalAnnualOpportunityCents ?? 0)}/yr still on the table</div>
   </div>
 
+  ${(sv?.reviewQueue??[]).length?`
+  <div class="sec"><span class="lbl">Needs your review</span><span class="act">agent candidates · not claimed savings</span></div>
+  ${(sv.reviewQueue??[]).map((o,i)=>`
+    <div class="card agent-review-card">
+      <div class="row" style="align-items:flex-start"><div class="dot"><iconify-icon icon="ph:magnifying-glass-bold"></iconify-icon></div>
+        <div class="grow"><div style="font-weight:700;font-size:13.5px">${esc(o.title)}</div>
+          <div class="tiny muted" style="margin-top:5px;line-height:1.6">${esc(o.detail)}</div>
+          <div class="agent-evidence"><span>${Math.round((o.confidence??0)*100)}% pattern confidence</span><span>${$m0(o.annualCents)} annual cost reviewed</span></div></div></div>
+      <div class="row" style="gap:8px;margin-top:10px">
+        <button class="btn go" onclick="claimReview(${i})">I cancelled it</button>
+        <button class="btn ghost" onclick="keepReview(${i})">Worth keeping</button>
+      </div>
+    </div>`).join('')}`:''}
+
   <div class="sec"><span class="lbl">What you actually spend</span><span class="act">last 30 days</span></div>
   <div class="card"><div class="tiny muted">Total spent</div>
     <div class="big" style="margin-top:4px">${$m0(sp?.totalCents ?? 0)}</div>
@@ -512,7 +526,7 @@ function viewSave() {
   </div>` : (S.state?.llm === false ? `
   <div class="card" style="border-style:dashed">
     <div class="tiny muted" style="line-height:1.6"><b style="color:var(--ink)">Findings are rule-based right now.</b>
-    Add an <code>ANTHROPIC_API_KEY</code> and the agent will read them, tell you which three matter and why, and auto-categorise every unknown merchant.</div>
+    The configured free model is not allowed to read personal financial details unless you explicitly opt in. Exact findings still run locally; model reasoning is shown only when the privacy gate permits it.</div>
   </div>` : '')}
 
   ${sp?.uncategorisedShare > 5 ? `<div class="card" style="border-color:var(--warn)">
@@ -560,6 +574,7 @@ function viewWallet() {
   const held = (st.instruments ?? []).filter(i => i.balanceCents != null);
   const total = held.reduce((a,i)=>a+i.balanceCents,0);
   const ex = sp?.excluded ?? {};
+  const cardIdeas = cardRecommendations(cards);
   return `
   ${BRAND()}
   <div class="top"><h1>Pay</h1><span class="sp"></span>
@@ -571,7 +586,7 @@ function viewWallet() {
       <div class="dot" style="background:color-mix(in srgb,var(--save) 12%,transparent)">🔒</div>
       <div class="grow">
         <div style="font-weight:700;font-size:14px">Verafi holds $0.00 of your money</div>
-        <div class="tiny muted" style="margin-top:5px;line-height:1.6">Read-only access. It can see balances and transactions and cannot move a cent. There is no held balance, no custody, and nothing to lose if this server disappears.</div>
+        <div class="tiny muted" style="margin-top:5px;line-height:1.6">Read-only access. It can see balances and transactions but cannot move a cent. Your funds are not held here; keep the Verafi data file backed up so its history is recoverable.</div>
       </div>
     </div>
   </div>
@@ -580,6 +595,11 @@ function viewWallet() {
     <div class="tiny muted">Visible across your linked accounts</div>
     <div class="big" style="margin-top:4px">${$m(total)}</div>
   </div>` : ''}
+
+  ${cardIdeas.length?`<div class="sec"><span class="lbl">Agent card guide</span><span class="act">from cards you tagged</span></div>
+  <div class="card agent-guide">${cardIdeas.map((x,i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+    <div class="grow"><div style="font-size:13px;font-weight:650">${title(x.category)}</div>
+      <div class="tiny muted" style="margin-top:2px">Use ${esc(x.name)}</div></div><span class="badge b-save">${x.mult}x</span></div>`).join('')}</div>`:''}
 
   <div class="sec"><span class="lbl">Connected instruments</span></div>
   ${(st.instruments ?? []).map(i=>`
@@ -613,9 +633,19 @@ function viewWallet() {
   </div>`;
 }
 
+function cardRecommendations(cards) {
+  if(!cards?.rules||!cards?.instruments?.length)return [];
+  return ['dining','grocery','travel'].map(category=>{
+    const rules=cards.rules[category]??cards.rules.default??{};
+    return cards.instruments.map(i=>({category,name:i.displayName,mult:rules[i.cardKey]??1}))
+      .sort((a,b)=>b.mult-a.mult)[0];
+  }).filter(x=>x&&x.mult>1);
+}
+
 /* ---------------------------------------------------------------- agent */
 function viewAgent() {
   const st = S.state, f = st.findings ?? [];
+  const review=st.agentReview??{coverage:{},agents:[]};
   const CAP = { observe:'Watches and flags', recommend:'Researches and advises',
                 execute_authorized:'Acts with your approval', execute_preauthorized:'Acts inside a signed limit' };
   return `
@@ -624,29 +654,39 @@ function viewAgent() {
     <button class="chipbtn" onclick="runAgentsNow()">${S.busy?'<span class="spin"></span>':'↻ run'}</button></div>
   <div class="tiny muted">${(st.agents??[]).filter(a=>a.enabled).length} of ${(st.agents??[]).length} running · every 24h</div>
 
+  <div class="agent-brief">
+    <div><span>Transactions reviewed</span><b>${review.coverage.transactions??0}</b></div>
+    <div><span>History</span><b>${review.coverage.days??0} days</b></div>
+    <div><span>Account-attributed</span><b>${review.coverage.attributableToAccount??0}</b></div>
+  </div>
+
   ${S.insight?.ok ? `<div class="card" style="border-color:var(--spend)">
     <div class="tiny muted">Latest agent readout</div>
     <div style="font-weight:650;font-size:14px;line-height:1.5;margin-top:6px">${esc(S.insight.headline)}</div>
   </div>` : ''}
 
-  <div class="card" style="border-color:var(--save)">
-    <div style="font-weight:700;font-size:13.5px">None of these can spend money</div>
-    <div class="tiny muted" style="margin-top:5px;line-height:1.6">Every agent here is <b style="color:var(--ink)">observe</b> or <b style="color:var(--ink)">recommend</b>. Spending would require a signed limit and a biometric on your phone — deliberately not built while this is read-only.</div>
+  <div class="card" style="border-color:${st.llmProvider?.allowPersonal?'var(--save)':'var(--warn)'}">
+    <div style="font-weight:700;font-size:13.5px">Reasoning status · ${st.llmProvider?.allowPersonal?'hybrid':'local analysis only'}</div>
+    <div class="tiny muted" style="margin-top:5px;line-height:1.6">${st.llmProvider?.allowPersonal
+      ? `Detectors calculate exact candidates locally; ${esc(st.llmProvider.provider)} prioritizes and explains them.`
+      : 'The free model is not receiving personal transaction data. Detectors still run locally, but an LLM has not independently investigated each agent. Verafi will not pretend otherwise.'}</div>
   </div>
 
   <div class="sec"><span class="lbl">Your agents</span></div>
   ${(st.agents ?? []).map((a,i)=>{
-    const mine = f.filter(x => x.agent === a.name.toLowerCase().replace(/\s+/g,'_'));
+    const audit=review.agents?.find(x=>x.label===a.name);
+    const mine = f.filter(x => x.agent === (audit?.id ?? a.name.toLowerCase().replace(/\s+/g,'_')));
     return `<div class="card" style="${a.enabled?'':'opacity:.6'}">
       <div class="row" style="align-items:flex-start">
         <div class="grow">
           <div class="row" style="gap:6px"><span style="font-weight:650;font-size:13.5px">${esc(a.name)}</span>
             <span class="badge b-spend">${esc(a.surface)}</span>
             ${mine.length?`<span class="badge b-save">${mine.length} found</span>`:''}</div>
-          <div class="tiny muted" style="margin-top:4px;line-height:1.55">${mine.length
-            ? esc(mine[0].detail ?? mine[0].title)
-            : (a.enabled ? 'No current issue found in your data.' : 'Off — turn on to analyze your data.')}</div>
-          <div class="tiny" style="color:var(--dim);margin-top:5px">${CAP[a.capability] ?? a.capability}</div>
+          <div class="agent-counts"><span>${audit?.candidates??0} candidates</span><span>${audit?.confirmed??0} confirmed</span><span>${audit?.needsReview??0} need review</span></div>
+          <div class="tiny muted" style="margin-top:7px;line-height:1.55">${a.enabled
+            ? (mine.length ? esc(mine[0].detail ?? mine[0].title) : `No confirmed issue. Checked ${audit?.candidates??0} candidates across ${esc(audit?.scope??'its scope')}.`)
+            : `Off — ${esc(audit?.scope??'no analysis is being run')}.`}</div>
+          <div class="tiny" style="color:var(--dim);margin-top:6px">Next: ${esc(audit?.next??CAP[a.capability]??a.capability)}</div>
         </div>
         <div class="tog ${a.enabled?'on':''}" onclick="toggleAgent('${a.id}',${!a.enabled})"><i></i></div>
       </div>
@@ -688,6 +728,8 @@ function viewSettings() {
     <input type="file" id="file2" multiple accept=".csv,.ofx,.qfx,.txt" style="display:none" onchange="importFiles(this.files)"/>
   </div>
 
+  ${coveragePanel(st.coverage)}
+
   ${cards?.instruments?.length ? `
   <div class="sec"><span class="lbl">Which card is which</span></div>
   <div class="card">
@@ -721,12 +763,23 @@ function viewSettings() {
   <div class="card"><div class="row">
     <span class="tiny muted grow">Running version</span>
     <span class="badge b-save">${esc(st.version ?? 'unknown')}</span></div>
-    <div class="tiny" style="color:var(--dim);margin-top:8px">If this isn't <b style="color:var(--mut)">v8</b>, the server is still on old code and the deploy didn't take.</div>
+    <div class="tiny" style="color:var(--dim);margin-top:8px">The page assets and server are version-stamped together. A hard refresh should show this same version after every deployment.</div>
   </div>
 
   <div class="sec"><span class="lbl">Danger</span></div>
   <div class="card"><button class="btn ghost" style="color:var(--dang)" onclick="wipe()">Erase everything and start over</button></div>
   ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}`;
+}
+
+function coveragePanel(c) {
+  if(!c)return '';
+  return `<div class="sec"><span class="lbl">Data coverage</span><span class="act">what every agent can actually see</span></div>
+  <div class="card coverage-card">
+    <div class="coverage-grid"><div><b>${c.transactions}</b><span>transactions</span></div><div><b>${c.historyDays}</b><span>days observed</span></div><div><b>${c.cards}</b><span>credit cards</span></div><div><b>${c.categorisedPct}%</b><span>categorised</span></div></div>
+    ${(c.perInstrument??[]).map(i=>`<div class="li"><div class="grow"><div style="font-size:12.5px;font-weight:650">${esc(i.name)}</div><div class="tiny muted">${i.transactions} transactions · ${i.historyDays} days</div></div><span class="badge ${i.historyDays>=180?'b-save':'b-warn'}">${i.historyDays>=180?'usable':'thin'}</span></div>`).join('')}
+    ${c.legacyConnections?`<div class="guard" style="border-color:var(--warn)"><b style="color:var(--warn)">Older Plaid connection detected.</b><br/>It was initialized before Verafi requested 730 days. Plaid cannot expand that Item after initialization; a controlled relink is required to retrieve older available history.</div>`:''}
+    ${c.historicalSyncPending?`<div class="tiny muted" style="margin-top:9px">Plaid is still completing the historical pull. Verafi will keep syncing it.</div>`:''}
+  </div>`;
 }
 
 async function autoCategorise() {
@@ -810,6 +863,23 @@ async function dismiss(key) { await api('/api/findings/dismiss', { key }); await
 
 async function claim(i) {
   const o = S.save.opportunities[i];
+  await recordSaving(o);
+}
+
+async function claimReview(i) {
+  const o=(S.save.reviewQueue??[])[i];
+  await recordSaving(o);
+}
+
+async function keepReview(i) {
+  const o=(S.save.reviewQueue??[])[i];
+  if(!o)return;
+  await api('/api/findings/dismiss',{key:`${o.agent}:${o.ref}`});
+  await load();
+}
+
+async function recordSaving(o) {
+  if(!o)return;
   const METHOD = { subscription_auditor:'subscription_cancel', fee_catcher:'fee_refund',
     card_router:'card_routing', price_creep:'negotiation', overlap_watch:'subscription_cancel',
     dormant_spend:'subscription_cancel', duplicate_watch:'duplicate_refund' };
@@ -848,7 +918,7 @@ function render() {
 
   if (S.locked) { $('tabs').innerHTML = ''; setTimeout(()=>$('pc')?.focus(), 60); return; }
   $('tabs').innerHTML = !st?.linked ? '' :
-    [['ask','Shop'],['spend','Spend'],['save','Save'],['wallet','Wallet'],['agent','Agents']].map(([k,l])=>
+    [['ask','Shop'],['spend','Spend'],['save','Save'],['wallet','Pay'],['agent','Agents']].map(([k,l])=>
       `<button class="${S.tab===k?'on':''}" onclick="S.tab='${k}';render();scrollTo(0,0)">
          <svg viewBox="0 0 24 24">${ICONS[k]}</svg>${l}</button>`).join('');
 

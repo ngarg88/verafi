@@ -25,7 +25,7 @@ test('detects a real cadence and ignores noise', () => {
   assert.ok(Math.abs(s.recurring[0].cadenceDays - 30) < 1);
 });
 
-test('flags a subscription that is still billing but dormant', () => {
+test('detects a recurring stream that appears to have stopped', () => {
   const s = deriveSignals(stream({ merchantId:'equinox', everyDays:30, count:6, amountCents:30500, endOffsetDays:70 }), NOW);
   assert.equal(s.dormantSubscriptions.length, 1);
 });

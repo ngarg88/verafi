@@ -36,11 +36,12 @@ const found = (findings, re) => findings.some(f => re.test(f.title) || re.test(f
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\nRECALL — does it find what is genuinely there?\n');
 
-// 1. dormant gym: charged monthly for a year, stopped going 4 months ago
+// 1. active gym cadence: transactions prove billing, but not whether it is used.
 {
   const t = [];
-  for (let i = 4; i < 16; i++) t.push(tx('EQUINOX SF', 305, 30*i, {cat:'fitness'}));
-  ck('dormant membership', found(run(t), /equinox/i), '$305/mo still billing, unused 4 months');
+  for (let i = 0; i < 12; i++) t.push(tx('EQUINOX SF', 305, 30*i, {cat:'fitness'}));
+  const f=run(t).find(x=>/equinox/i.test(x.title));
+  ck('active membership enters review', !!f && f.reviewOnly===true, '$305/mo billing; usage is unknown');
 }
 
 // 2. subscription that quietly went up 30%
@@ -130,9 +131,9 @@ console.log('\nHONESTY — are the numbers defensible?\n');
 
 {
   const t = [];
-  for (let i = 4; i < 16; i++) t.push(tx('EQUINOX SF', 305, 30*i, {cat:'fitness'}));
+  for (let i = 0; i < 12; i++) t.push(tx('EQUINOX SF', 305, 30*i, {cat:'fitness'}));
   const f = run(t).find(x => /equinox/i.test(x.title));
-  ck('annual figure = monthly x 12', f && f.annualCents === f.amountCents*12, f ? `$${f.amountCents/100}/mo -> $${f.annualCents/100}/yr` : 'not found');
+  ck('annual review cost = monthly x 12', f && f.reviewOnly && f.annualCents === f.amountCents*12, f ? `$${f.amountCents/100}/mo -> $${f.annualCents/100}/yr reviewed, not claimed` : 'not found');
   ck('finding explains itself', f && f.detail && f.detail.length > 40, f?.detail?.slice(0,60));
   ck('finding cites evidence', f && f.evidence && Object.keys(f.evidence).length > 0);
 }
