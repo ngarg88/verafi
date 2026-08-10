@@ -35,33 +35,73 @@ jobs:
           set -euo pipefail
 
           app_dir=/home/ubuntu/verafi-app
-          data_dir="$(sudo awk -F= '
-            /^[[:space:]]*DATA_DIR[[:space:]]*=/ {
-              value=$0
-              sub(/^[^=]*=/, "", value)
-              gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-              if ((substr(value,1,1) == "\"" && substr(value,length(value),1) == "\"") ||
-                  (substr(value,1,1) == "\047" && substr(value,length(value),1) == "\047")) {
-                value=substr(value,2,length(value)-2)
-              }
-              print value
-            }
-          ' /etc/verafi.env | tail -n 1)"
           release_dir="/home/ubuntu/verafi-release-${GITHUB_SHA}"
           backup_dir="/home/ubuntu/verafi-backup-${GITHUB_RUN_ID}"
 
           test -f /etc/verafi.env
-          test -n "$data_dir"
-          case "$data_dir" in
-            /*) ;;
-            *) echo "DATA_DIR must be an absolute path" >&2; exit 1 ;;
-          esac
-          test -d "$data_dir"
           test -d "$app_dir"
+
+          main_pid="$(sudo systemctl show --property=MainPID --value verafi)"
+          case "$main_pid" in
+            ''|0|*[!0-9]*) echo "Verafi service does not have a running PID" >&2; exit 1 ;;
+          esac
+
+          read_runtime_env() {
+            local key="$1"
+            sudo awk -v RS='\0' -v prefix="$key=" '
+              index($0, prefix) == 1 { print substr($0, length(prefix) + 1) }
+            ' "/proc/$main_pid/environ" | tail -n 1
+          }
+
+          configured_data_dir="$(read_runtime_env DATA_DIR)"
+          configured_statements_dir="$(read_runtime_env STATEMENTS_DIR)"
+
+          if [ -n "$configured_data_dir" ]; then
+            case "$configured_data_dir" in
+              /*) data_dir="$(realpath -m -- "$configured_data_dir")" ;;
+              *) echo "DATA_DIR must be an absolute path" >&2; exit 1 ;;
+            esac
+          else
+            data_dir="$app_dir/verafi/data"
+          fi
+
+          if [ -n "$configured_statements_dir" ]; then
+            case "$configured_statements_dir" in
+              /*) statements_dir="$(realpath -m -- "$configured_statements_dir")" ;;
+              *) echo "STATEMENTS_DIR must be an absolute path" >&2; exit 1 ;;
+            esac
+          else
+            statements_dir="$app_dir/verafi/statements"
+          fi
+
+          test -d "$data_dir"
 
           rm -rf "$release_dir"
           mkdir -p "$release_dir"
           cp -a packages verafi package.json "$release_dir/"
+
+          preserve_runtime_dir() {
+            local source_dir="$1"
+            case "$source_dir" in
+              "$app_dir"/*)
+                local relative_path="${source_dir#"$app_dir"/}"
+                local target_dir="$release_dir/$relative_path"
+                test -n "$relative_path"
+                case "$target_dir" in
+                  "$release_dir"/*) ;;
+                  *) echo "Refusing unsafe runtime-data target" >&2; exit 1 ;;
+                esac
+                rm -rf "$target_dir"
+                mkdir -p "$(dirname "$target_dir")"
+                cp -a "$source_dir" "$target_dir"
+                ;;
+            esac
+          }
+
+          preserve_runtime_dir "$data_dir"
+          if [ -d "$statements_dir" ]; then
+            preserve_runtime_dir "$statements_dir"
+          fi
 
           rollback() {
             sudo systemctl stop verafi || true
@@ -80,7 +120,7 @@ jobs:
 
           healthy=false
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if sudo systemctl is-active --quiet verafi && curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8788/ >/dev/null; then
+            if sudo systemctl is-active --quiet verafi && curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8788/api/health >/dev/null; then
               healthy=true
               break
             fi
