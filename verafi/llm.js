@@ -163,15 +163,19 @@ async function tavilySearch({ query, meter, signal }) {
     const r = await fetch('https://api.tavily.com/search', {
       method:'POST', signal, headers:{ 'content-type':'application/json' },
       body:JSON.stringify({ api_key:process.env.TAVILY_API_KEY, query,
-        search_depth:'basic', max_results:5, include_answer:false, include_raw_content:false })
+        search_depth:'basic', max_results:5, include_answer:false, include_raw_content:false,
+        include_images:true, include_image_descriptions:true })
     });
     if (!r.ok) return { ok:false, reason:`search_http_${r.status}`, detail:(await r.text()).slice(0,200) };
     const j = await r.json();
     const sources = (j.results ?? []).filter(x=>x.url).map(x=>({
-      url:x.url, title:x.title || x.url, content:String(x.content ?? '').slice(0,1800)
+      url:x.url, title:x.title || x.url, content:String(x.content ?? '').slice(0,1800),
+      images:(x.images ?? []).slice(0,3)
     }));
+    const images = (j.images ?? []).map(x => typeof x === 'string' ? { url:x, description:'' } : x)
+      .filter(x=>/^https?:\/\//.test(x?.url ?? '')).slice(0,10);
     if (meter) meter.tavilySearches = used + 1;
-    return { ok:true, sources };
+    return { ok:true, sources, images };
   } catch (e) {
     return { ok:false, reason:e.name === 'AbortError' ? 'timeout' : 'search_network', detail:e.message };
   }
@@ -210,14 +214,16 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
   const timeoutMs = Number(process.env.LLM_TIMEOUT_MS ?? 20000);
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
 
-  let externalSources = [];
+  let externalSources = [], externalImages = [];
   if (search && process.env.TAVILY_API_KEY) {
     const found = await tavilySearch({ query:user, meter, signal:ctrl.signal });
     if (!found.ok) { clearTimeout(timer); return found; }
     externalSources = found.sources;
+    externalImages = found.images ?? [];
     const evidence = externalSources.map((s,i)=>
       `[${i+1}] ${s.title}\nURL: ${s.url}\n${s.content}`).join('\n\n');
-    system += `\n\nUse only the current web evidence below for product facts, prices, availability and links. Cite sources inline as [1], [2], etc. If evidence is insufficient, say so.\n\n${evidence}`;
+    const imageEvidence = externalImages.map((im,i)=>`[IMAGE ${i+1}] ${im.description||'Product image'}\nURL: ${im.url}`).join('\n\n');
+    system += `\n\nUse only the current web evidence below for product facts, prices, availability and links. Cite sources inline as [1], [2], etc. If evidence is insufficient, say so.\n\n${evidence}${imageEvidence?`\n\nAvailable product images:\n${imageEvidence}`:''}`;
   }
 
   // One adapter for every OpenAI-compatible provider: groq, cerebras, openrouter, ollama.
@@ -268,7 +274,7 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
         const calls = meter.openRouterDaily?.day === day ? meter.openRouterDaily.calls : 0;
         meter.openRouterDaily = { day, calls:calls+1 };
       }
-      return { ok:true, text, costUsd:0, provider: info.provider, sources: externalSources };
+      return { ok:true, text, costUsd:0, provider: info.provider, sources: externalSources, images:externalImages };
     } catch (e) {
       return { ok:false, reason: e.name==='AbortError' ? 'timeout' : 'network', detail:e.message };
     } finally { clearTimeout(timer); }

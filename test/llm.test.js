@@ -46,8 +46,8 @@ test('zero-spend Shop uses Tavily search and an OpenRouter free model', async ()
   global.fetch = async (url, options) => {
     calls.push({ url, body:JSON.parse(options.body) });
     if (String(url).includes('tavily.com')) return new Response(JSON.stringify({ results:[
-      { title:'Example shoe', url:'https://shop.example/shoe', content:'Current price $89.' }
-    ] }), { status:200 });
+      { title:'Example shoe', url:'https://shop.example/shoe', content:'Current price $89.', images:['https://shop.example/shoe.jpg'] }
+    ], images:[{url:'https://shop.example/shoe.jpg',description:'Example shoe'}] }), { status:200 });
     return new Response(JSON.stringify({ choices:[{ message:{ content:'Example shoe is $89 [1].' } }] }), { status:200 });
   };
   try {
@@ -59,7 +59,9 @@ test('zero-spend Shop uses Tavily search and an OpenRouter free model', async ()
     assert.equal(out.provider, 'openrouter');
     assert.equal(out.sources[0].url, 'https://shop.example/shoe');
     assert.equal(calls[0].body.search_depth, 'basic');
+    assert.equal(calls[0].body.include_images, true);
     assert.equal(calls[1].body.model.endsWith(':free'), true);
+    assert.equal(out.images[0].url, 'https://shop.example/shoe.jpg');
     assert.equal(meter.tavilySearches, 1);
     assert.equal(meter.openRouterDaily.calls, 1);
   } finally {
@@ -82,4 +84,16 @@ test('zero-spend mode blocks paid OpenRouter models before any request', async (
   } finally {
     for (const k of names) old[k] == null ? delete process.env[k] : process.env[k] = old[k];
   }
+});
+
+test('Shop decision JSON is grounded to searched URLs and images', async () => {
+  const { parseDealDecision } = await import('../verafi/deals.js');
+  const decision = parseDealDecision(JSON.stringify({summary:'Best balance.',products:[
+    {name:'Example Carry-On',label:'Best overall',price:129.99,seller:'Example Store',sourceIndex:1,imageIndex:1,
+     highlights:['6 lbs','Hardside'],shipping:'Free shipping',tradeoff:'Limited colors'}
+  ]}), [{title:'Example Store',url:'https://shop.example/item'}],
+      [{url:'https://cdn.example/item.jpg',description:'Carry-on'}]);
+  assert.equal(decision.products[0].url, 'https://shop.example/item');
+  assert.equal(decision.products[0].image, 'https://cdn.example/item.jpg');
+  assert.equal(decision.products[0].price, 129.99);
 });
