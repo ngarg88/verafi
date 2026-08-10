@@ -4,7 +4,7 @@
  * This is the one kind of question that CANNOT be answered from your transaction history.
  * It needs live prices from the outside world. Two honest options:
  *
- *   1. With a search-capable provider configured (OpenAI, Anthropic, or Gemini),
+ *   1. With Tavily plus a reasoning provider, or a provider with built-in search,
  *      this researches real current options and grounds the budget advice in YOUR spending.
  *   2. Without one, it refuses rather than inventing plausible-looking prices. A made-up
  *      hotel rate is worse than no answer.
@@ -202,15 +202,15 @@ export async function researchDeal({ query, tx, model = 'claude-sonnet-5', meter
     return { ...meter.cache[cacheKey].result, cached: true };
   }
 
-  // providerInfo({ search: true }) only ever returns a provider that can reach the live
-  // web (currently: OpenAI, Anthropic or Gemini). If none is configured, this is unavailable
+  // providerInfo({ search: true }) only returns a provider that can reach the live
+  // web directly or can reason over Tavily results. If none is configured, this is unavailable
   // regardless of whether a non-search provider like Groq is active for everything else.
   if (!info.available) return {
     ok: false,
     answer: 'Deal research needs live web search, and no search-capable provider is configured — so I won\'t guess. Anything I made up here would look convincing and be wrong.',
     howToFix: [
-      'Free option: get a key at aistudio.google.com/apikey',
-      'On the server:  echo "GEMINI_API_KEY=AIza..." | sudo tee -a /etc/verafi.env',
+      'Free option: add TAVILY_API_KEY and OPENROUTER_API_KEY on the server',
+      'Set LLM_PROVIDER=openrouter, OPENROUTER_MODEL to a :free model, and ZERO_SPEND_MODE=1',
       'Then: sudo systemctl restart verafi'
     ],
     context: ctx
@@ -243,6 +243,8 @@ Context: ${safeContext}.`;
     answer: out.reason === 'timeout'
       ? 'The search took too long and was stopped. Try a narrower question.'
       : out.reason === 'privacy_blocked' ? out.detail
+      : out.reason === 'search_quota_reached' ? 'The free monthly search allowance has been reached. Search is paused so Verafi cannot incur charges.'
+      : out.reason === 'reasoning_quota_reached' ? 'The free daily reasoning allowance has been reached. Try again tomorrow; Verafi will not use a paid fallback.'
       : `Could not reach the research service (${out.reason}${out.detail ? ': ' + out.detail : ''}).`
   };
 

@@ -116,9 +116,12 @@ export async function runRule({ rule, store, now = Date.now() }) {
   }
 
   if (!hasLLM()) return { matches: [], needsKey: true,
-    why: 'This hunt searches the web, which needs an LLM provider configured (Anthropic or Gemini). Switch it to "watch my own purchases" to run for free.' };
+    why: 'This price watch searches the web, which needs Tavily plus a reasoning provider (or a provider with built-in search). Switch it to "watch my own purchases" to run without web search.' };
 
-  const out = await researchDeal({ query: buildQuery(rule), tx });
+  const month = new Date(now).toISOString().slice(0,7);
+  store.data.meter ??= {};
+  store.data.meter[month] ??= { monthUsd:0, calls:0, queries:0, cache:{} };
+  const out = await researchDeal({ query: buildQuery(rule), tx, meter:store.data.meter[month] });
   if (!out.ok) return { matches: [], why: out.answer };
 
   // The model returns prose; we do not let it decide what counts as a match. The ceiling
