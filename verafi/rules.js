@@ -24,27 +24,43 @@ export const SOURCE = Object.freeze({
 
 export function makeRule(p) {
   if (!p.name) throw new Error('a hunt needs a name');
-  if (!Number.isInteger(p.ceilingCents) || p.ceilingCents <= 0) throw new Error('a hunt needs a hard ceiling');
+  const referencePriceCents = Math.round(Number(p.referencePriceCents));
+  const alertDropPct = p.alertDropPct == null ? null : Math.round(Number(p.alertDropPct));
+  if (alertDropPct != null && (!Number.isInteger(alertDropPct) || alertDropPct < 1 || alertDropPct > 90))
+    throw new Error('price-drop alerts must be between 1% and 90%');
+  if (alertDropPct != null && (!Number.isInteger(referencePriceCents) || referencePriceCents <= 0))
+    throw new Error('a percentage alert needs today\'s price as its baseline');
+  const suppliedCeiling = Math.round(Number(p.ceilingCents));
+  const ceilingCents = Number.isInteger(suppliedCeiling) && suppliedCeiling > 0
+    ? suppliedCeiling
+    : alertDropPct != null ? Math.round(referencePriceCents * (1-alertDropPct/100)) : null;
+  if (!ceilingCents) throw new Error('a hunt needs a target price or percentage drop');
   return {
     id: 'hunt_' + Math.random().toString(36).slice(2, 9),
     name: p.name,
     category: p.category ?? 'other',
     source: p.source ?? SOURCE.WEB,
-    ceilingCents: p.ceilingCents,
-    idealCents: p.idealCents ?? Math.round(p.ceilingCents * 0.8),
+    ceilingCents,
+    idealCents: p.idealCents ?? ceilingCents,
+    referencePriceCents: Number.isInteger(referencePriceCents) && referencePriceCents > 0 ? referencePriceCents : null,
+    alertDropPct,
+    productUrl: /^https:\/\//.test(String(p.productUrl ?? '')) ? String(p.productUrl) : null,
     traits: (p.traits ?? []).filter(Boolean),      // ["nonstop", "4 nights", "2 adults 2 kids"]
     merchants: p.merchants ?? null,                 // allowlist, or null for any
     maxMatches: p.maxMatches ?? 3,
     checkEveryHours: p.checkEveryHours ?? 24,
     expiresAt: p.expiresAt ?? Date.now() + 90*DAY,
     enabled: p.enabled ?? true,
-    createdAt: Date.now(), lastRunAt: null, runs: 0, matches: []
+    createdAt: Date.now(), lastRunAt: null, runs: 0, matches: [], priceHistory:[],
+    lastNotifiedPriceCents:null
   };
 }
 
 /** Human-readable, so you can see exactly what you armed. */
 export function describe(r) {
-  const bits = [`under ${f0(r.ceilingCents)}`];
+  const bits = [r.alertDropPct != null && r.referencePriceCents
+    ? `notify after a ${r.alertDropPct}% drop (${f0(r.ceilingCents)} or less)`
+    : `under ${f0(r.ceilingCents)}`];
   if (r.traits.length) bits.push(r.traits.join(', '));
   if (r.merchants?.length) bits.push(`only ${r.merchants.join(', ')}`);
   bits.push(r.source === SOURCE.WEB ? 'searching the web' : 'watching your own purchases');
@@ -55,10 +71,40 @@ export function describe(r) {
 export function buildQuery(r) {
   const parts = [r.name];
   if (r.traits.length) parts.push(r.traits.join(', '));
-  parts.push(`under $${Math.round(r.ceilingCents/100)}`);
+  if (r.productUrl) parts.push(`exact product reference ${r.productUrl}`);
+  parts.push(`find the best current real price and compare it with my buy trigger of $${Math.round(r.ceilingCents/100)}`);
   if (r.merchants?.length) parts.push(`from ${r.merchants.join(' or ')}`);
   parts.push('give current real prices with sources');
   return parts.join('. ');
+}
+
+/** Explain the decision from prices only. The model never decides whether a trigger fired. */
+export function recommendWatch(rule, currentPriceCents = null) {
+  const current = Number(currentPriceCents ?? rule.priceHistory?.[0]?.priceCents);
+  if (!Number.isFinite(current) || current <= 0) return {
+    status:'monitoring', label:'Monitoring', detail:'Waiting for the first current-price check.'
+  };
+  const baseline = rule.referencePriceCents ?? current;
+  const dropPct = baseline > 0 ? +((baseline-current)/baseline*100).toFixed(1) : 0;
+  const triggered = current <= rule.ceilingCents;
+  const prior = (rule.priceHistory ?? []).map(x=>x.priceCents).filter(x=>Number.isFinite(x)&&x>0);
+  const priorLow = prior.length ? Math.min(...prior) : null;
+  return triggered ? {
+    status:'buy_now', label:'Buy now', triggered:true, dropPct,
+    detail:`Current price ${f0(current)} reached your ${rule.alertDropPct != null ? rule.alertDropPct+'% drop' : f0(rule.ceilingCents)+' target'}${priorLow && current<=priorLow ? ' and is the lowest price this agent has recorded' : ''}.`
+  } : {
+    status:'wait', label: current-rule.ceilingCents <= rule.ceilingCents*.05 ? 'Almost there — wait' : 'Keep waiting', triggered:false, dropPct,
+    detail:`Current price ${f0(current)} is ${f0(current-rule.ceilingCents)} above your trigger${rule.alertDropPct != null ? ` after a ${Math.max(0,dropPct)}% drop so far` : ''}.`
+  };
+}
+
+function productMatchesRule(rule, product) {
+  if (!rule.productUrl) return true;
+  if (product.url === rule.productUrl) return true;
+  const ignored = new Set(['with','from','the','and','for','this','that']);
+  const words = s => String(s??'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>2&&!ignored.has(w));
+  const wanted = words(rule.name), got = new Set(words(product.name));
+  return wanted.length > 0 && wanted.filter(w=>got.has(w)).length / wanted.length >= .6;
 }
 
 /**
@@ -126,19 +172,33 @@ export async function runRule({ rule, store, now = Date.now() }) {
 
   // The model returns prose; we do not let it decide what counts as a match. The ceiling
   // is enforced here, on parsed numbers, not by asking the model to behave.
-  const prices = [...(out.answer.match(/\$\s?([\d,]+(?:\.\d{2})?)/g) ?? [])]
+  const products = (out.decision?.products ?? []).filter(p=>productMatchesRule(rule,p));
+  const structuredPrices = products.map(p=>Math.round(Number(p.price)*100)).filter(c=>Number.isFinite(c)&&c>1000);
+  const prosePrices = [...(out.answer.match(/\$\s?([\d,]+(?:\.\d{2})?)/g) ?? [])]
     .map(x => Math.round(parseFloat(x.replace(/[$,\s]/g,'')) * 100))
-    .filter(c => c > 1000 && c <= rule.ceilingCents);
+    .filter(c => c > 1000);
+  const prices = structuredPrices.length ? structuredPrices : rule.productUrl ? [] : prosePrices;
   if (!prices.length) return { matches: [], answer: out.answer, sources: out.sources,
-    why: `Nothing found at or under ${f0(rule.ceilingCents)}.` };
+    recommendation:recommendWatch(rule), why:'No trustworthy current price was parsed, so the agent kept monitoring.' };
 
   const best = Math.min(...prices);
-  const item = holdDeal({ store, title: rule.name, priceCents: best,
+  rule.priceHistory.unshift({ at:now, priceCents:best });
+  rule.priceHistory = rule.priceHistory.slice(0,90);
+  const recommendation = recommendWatch(rule, best);
+  if (!recommendation.triggered) return { matches:[], answer:out.answer, sources:out.sources,
+    recommendation, why:recommendation.detail };
+  if (rule.lastNotifiedPriceCents != null && best >= rule.lastNotifiedPriceCents)
+    return { matches:[], answer:out.answer, sources:out.sources, recommendation,
+      alreadyNotified:true, why:`${recommendation.detail} You were already notified at an equal or better price.` };
+
+  const product = products.filter(p=>Math.round(Number(p.price)*100)===best)[0];
+  const item = holdDeal({ store, title: product?.name ?? rule.name, priceCents: best,
     targetCents: rule.idealCents, category: rule.category,
-    notes: out.answer.slice(0, 600), url: out.sources?.[0]?.url ?? '' });
+    notes: out.answer.slice(0, 600), url: product?.url ?? out.sources?.[0]?.url ?? '', recommendation });
+  rule.lastNotifiedPriceCents = best;
   rule.matches.unshift({ at: now, itemId: item.id, priceCents: best });
   rule.matches = rule.matches.slice(0, rule.maxMatches);
-  return { matches: [item], answer: out.answer, sources: out.sources, costUsd: out.costUsd };
+  return { matches: [item], answer: out.answer, sources: out.sources, costUsd: out.costUsd, recommendation };
 }
 
 /** Every hunt that is due. Called by the daily schedule. */
