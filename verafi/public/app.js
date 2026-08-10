@@ -20,9 +20,10 @@ const api = async (p, body) => {
 const $m = (c) => (c/100).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2});
 const $m0 = (c) => (c/100).toLocaleString('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0});
 const esc = (s) => String(s ?? '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+const escAttr = (s) => esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const title = (s) => String(s ?? '').replace(/[-_]/g,' ').replace(/\b\w/g, m => m.toUpperCase());
 
-const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, unknowns:null, taxonomy:null, insight:null, lastQuery:null, spend:null, save:null, forecast:null, busy:false, error:null, compare:[], compareOpen:false, actionNote:null };
+const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, unknowns:null, taxonomy:null, insight:null, lastQuery:null, spend:null, save:null, busy:false, error:null, compare:[], compareOpen:false, actionNote:null, addCategoryOpen:false, watchDraft:null, openAgent:null };
 
 const ICONS = {
   ask:'<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
@@ -38,18 +39,19 @@ async function load() {
   if (S.state.linked) {
     // One missing endpoint must never blank the whole app. Each call fails on its own.
     const safe = (p) => api(p).catch(e => ({ __failed: p, __error: e.message }));
-    const [sp, sv, fc, cd, rs, dc, wl, hu, un, ins] = await Promise.all([
-      safe('/api/spend?days=30'), safe('/api/save'), safe('/api/forecast'),
+    const [sp, sv, cd, rs, dc, wl, hu, un, ins] = await Promise.all([
+      safe('/api/spend?days=30'), safe('/api/save'),
       safe('/api/cards'), safe('/api/research'), safe('/api/deals/presets'), safe('/api/deals/watchlist'), safe('/api/hunts'), safe('/api/unknowns'), safe('/api/insight')
     ]);
-    const failed = [sp,sv,fc,cd,rs,dc,wl,hu,un,ins].filter(x => x?.__failed).map(x => x.__failed);
+    const failed = [sp,sv,cd,rs,dc,wl,hu,un,ins].filter(x => x?.__failed).map(x => x.__failed);
     Object.assign(S, {
       spend: sp.__failed ? null : sp, save: sv.__failed ? null : sv,
-      forecast: fc.__failed ? null : fc, cards: cd.__failed ? null : cd,
+      cards: cd.__failed ? null : cd,
       presets: rs.__failed ? null : rs.presets,
       dealCats: dc?.__failed ? [] : dc.categories,
       watchlist: wl?.__failed ? [] : wl.items,
       hunts: hu?.__failed ? [] : hu.hunts,
+      notificationChannel: hu?.__failed ? null : hu.notificationChannel,
       unknowns: un?.__failed ? [] : un.unknowns,
       taxonomy: un?.__failed ? [] : un.taxonomy,
       insight: ins?.__failed ? null : ins,
@@ -122,22 +124,23 @@ function viewShop() {
 
   if (open) {
     const c = cats.find(x => x.key === open);
+    if (!c) { S.openDeal=null; return viewShop(); }
     return `
     <div class="top"><button class="chipbtn" onclick="S.openDeal=null;S.answer=null;render()">← Shop</button><span class="sp"></span></div>
     <div class="card"><div class="row">
-      <div class="dot">${c.icon}</div>
+      <div class="dot">${categoryIcon(c)}</div>
       <div class="grow"><div style="font-weight:650;font-size:15px">${esc(c.label)}</div>
       <div class="tiny muted" style="margin-top:3px">${esc(c.basis)}</div></div></div>
     </div>
     <div class="sec"><span class="lbl">Ask the agent</span><span class="act">budget ~$${c.budget}</span></div>
-    ${c.asks.map(a=>`<div class="card" onclick="doAsk(null,${JSON.stringify(a).replace(/"/g,'&quot;')})" style="cursor:pointer">
+    ${c.asks.map((a,i)=>`<div class="card" onclick="doCategoryAsk('${c.key}',${i})" style="cursor:pointer">
       <div class="row"><span class="grow" style="font-size:13.5px;line-height:1.45">${esc(a)}</span><span class="muted">›</span></div></div>`).join('')}
     <div class="card">
       <input id="q" placeholder="or ask your own…" style="border:0;padding:4px 0;font-size:15px"
              onkeydown="if(event.key==='Enter')doAsk()"/>
-      <button class="btn go" onclick="doAsk()">${S.busy?'Researching…':'Search'}</button>
+      <button class="btn go" onclick="doAsk(null,null,'${c.key}')">${S.busy?'Researching…':'Search'}</button>
     </div>
-    ${answerCard(r)}`;
+    ${answerCard(r)}${watchSheet()}`;
   }
 
   if (r?.kind === 'deal' && r.decision?.products?.length) {
@@ -163,12 +166,14 @@ function viewShop() {
 
   <div class="sec"><span class="lbl">Price watches</span>
     <button class="act" onclick="newHunt()">+ new</button></div>
+  <div class="tiny muted alert-channel"><iconify-icon icon="ph:bell-bold"></iconify-icon>${S.notificationChannel?`${title(S.notificationChannel)} alerts are on`:'Alerts appear in Verafi; add a notification channel in Setup for off-app alerts'}</div>
   ${(S.hunts ?? []).length ? S.hunts.map(h=>`
     <div class="card" style="${h.enabled?'':'opacity:.6'}">
       <div class="row" style="align-items:flex-start">
         <div class="grow">
           <div style="font-size:13.5px;font-weight:650">${esc(h.name)}</div>
           <div class="tiny muted" style="margin-top:4px;line-height:1.5">${esc(h.summary)}</div>
+          <div class="watch-recommendation ${h.recommendation?.status??'monitoring'}"><b>${esc(h.recommendation?.label??'Monitoring')}</b><span>${esc(h.recommendation?.detail??'Waiting for the next check.')}</span></div>
           <div class="tiny" style="color:var(--dim);margin-top:5px">
             ${h.runs} checks${h.matches.length?` · ${h.matches.length} match${h.matches.length>1?'es':''}`:' · nothing yet'}</div>
         </div>
@@ -181,19 +186,39 @@ function viewShop() {
     </div>`).join('')
    : `<div class="card"><div class="tiny muted" style="line-height:1.6">No price watches yet. Set a maximum price and your requirements; Verafi checks daily and puts matching options in Spend for your review.</div></div>`}
 
-  <div class="sec"><span class="lbl">Your categories</span><span class="act">by what you spend</span></div>
+  <div class="sec"><span class="lbl">Your categories</span><button class="act" onclick="S.addCategoryOpen=!S.addCategoryOpen;render()">${S.addCategoryOpen?'close':'+ add your own'}</button></div>
+  ${S.addCategoryOpen ? customCategoryForm() : ''}
   ${cats.map(c=>`
-    <div class="card" onclick="S.openDeal='${c.key}';S.answer=null;render();scrollTo(0,0)" style="cursor:pointer">
+    <div class="card category-card" onclick="S.openDeal='${c.key}';S.answer=null;render();scrollTo(0,0)" style="cursor:pointer">
       <div class="row">
-        <div class="dot">${c.icon}</div>
+        <div class="dot">${categoryIcon(c)}</div>
         <div class="grow"><div style="font-size:13.5px;font-weight:650">${esc(c.label)}</div>
-          <div class="tiny muted" style="margin-top:3px">${esc(c.basis)}</div></div>
-        <span class="muted">›</span>
+          <div class="tiny muted" style="margin-top:3px">${esc(c.basis)}</div>
+          ${c.custom?`<div class="agent-counts"><span>${c.defaultDropPct}% default alert</span><span>budget $${c.budget}</span></div>`:''}</div>
+        ${c.custom?`<button class="category-delete" aria-label="Delete ${escAttr(c.label)}" onclick="event.stopPropagation();deleteCustomCategory('${c.id}')">×</button>`:''}<span class="muted">›</span>
       </div>
     </div>`).join('')}
 
   ${answerCard(r)}
+  ${watchSheet()}
   ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}`;
+}
+
+function categoryIcon(c) {
+  return String(c?.icon??'').startsWith('ph:')
+    ? `<iconify-icon icon="${esc(c.icon)}"></iconify-icon>` : esc(c?.icon ?? '');
+}
+
+function customCategoryForm() {
+  return `<div class="card category-builder">
+    <div class="builder-head"><iconify-icon icon="ph:sparkle-bold"></iconify-icon><div><b>Create a shopping agent</b><span>Teach Verafi a need that transaction history cannot infer.</span></div></div>
+    <label>Name<input id="catName" placeholder="Kids' clothes" maxlength="48"/></label>
+    <label>Who or what is this for?<textarea id="catContext" placeholder="Two boys under 5; sizes 4T and 5T; durable everyday clothes; avoid dry-clean only" maxlength="320"></textarea></label>
+    <div class="form-grid"><label>Type<select id="catKind"><option value="family">Kids & family</option><option value="clothing">Clothing</option><option value="travel">Travel</option><option value="home">Home</option><option value="electronics">Electronics</option><option value="dining">Dining</option><option value="other">Other</option></select></label>
+      <label>Budget per purchase<input id="catBudget" type="number" min="1" step="1" value="150" inputmode="decimal"/></label></div>
+    <label>Default price alert<div class="percent-field"><input id="catDrop" type="number" min="1" max="90" value="20" inputmode="numeric"/><span>% drop</span></div></label>
+    <button class="btn go" onclick="saveCustomCategory()">Create agent</button>
+  </div>`;
 }
 
 function answerCard(r) {
@@ -253,7 +278,7 @@ function shopDecision(r) {
     <button class="compare-all" onclick="openComparison()"><iconify-icon icon="ph:scales-bold"></iconify-icon><span>Compare all ${products.length}<small>See prices, features and tradeoffs side by side</small></span><b>›</b></button>
     ${S.actionNote?`<div class="action-toast">${esc(S.actionNote)}</div>`:''}
     <div class="merchant-guard"><iconify-icon icon="ph:shield-check-bold"></iconify-icon><span><b>Your checkout stays with the merchant.</b><small>Verafi never sees or stores your payment information.</small></span></div>
-  </section>`;
+  </section>${watchSheet()}`;
 }
 function productCard(p,i,isCompared) {
   const url=safeUrl(p.url), top=i===0;
@@ -294,16 +319,13 @@ async function saveProduct(i){
 }
 async function watchProduct(i){
   const p=decisionProduct(i); if(!p)return;
-  const target=prompt(`Notify me at or below what price?`, String(Math.floor(p.price)));
-  if(!target)return;
-  const ceiling=Number(target); if(!Number.isFinite(ceiling)||ceiling<=0){S.error='Enter a valid target price.';render();return;}
-  await api('/api/hunts',{name:p.name,ceilingCents:Math.round(ceiling*100),traits:[p.seller,p.url].filter(Boolean),source:'web',category:S.openDeal??'other'});
-  S.actionNote=`Price watch created for ${p.name} at ${money(ceiling)}.`; await load();
+  const category=(S.dealCats??[]).find(c=>c.key===S.openDeal);
+  S.watchDraft={mode:'product',index:i,dropPct:category?.defaultDropPct??15}; render();
 }
 
 const md = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<b style="color:var(--ink)">$1</b>');
 
-async function doAsk(preset, presetQuery) {
+async function doAsk(preset, presetQuery, categoryKey=null) {
   const q = presetQuery ?? ($('q') ? $('q').value : '');
   if (!q && !preset) { S.error = 'Type what you are looking for first.'; render(); return; }
   S.busy = true; S.error = null; S.answer = null; S.lastQuery = q; S.compare=[];S.compareOpen=false;S.actionNote=null; render();
@@ -312,7 +334,7 @@ async function doAsk(preset, presetQuery) {
   const t = setTimeout(() => ctrl.abort(), 30000);
   try {
     const r = await fetch('/api/ask', { method:'POST', signal: ctrl.signal,
-      headers:{'content-type':'application/json'}, body: JSON.stringify({ query: q, preset }) });
+      headers:{'content-type':'application/json'}, body: JSON.stringify({ query: q, preset, categoryKey:categoryKey??S.openDeal }) });
     if (!r.ok) throw new Error('Server returned ' + r.status);
     S.answer = await r.json();
   } catch (e) {
@@ -320,6 +342,10 @@ async function doAsk(preset, presetQuery) {
       ? 'That took over 30 seconds and was stopped. The server may be busy — try again.'
       : e.message;
   } finally { clearTimeout(t); S.busy = false; render(); }
+}
+function doCategoryAsk(categoryKey,index){
+  const c=(S.dealCats??[]).find(x=>x.key===categoryKey);if(!c)return;
+  return doAsk(null,c.asks?.[index]??'',categoryKey);
 }
 
 async function holdFromAnswer() {
@@ -331,18 +357,51 @@ async function holdFromAnswer() {
   await load();
 }
 async function newHunt() {
-  const name = prompt('What should Verafi watch for?\ne.g. all-inclusive Bahamas');
-  if (!name) return;
-  const ceiling = prompt('Hard ceiling in dollars (never exceeded):');
-  if (!ceiling) return;
-  const traits = prompt('Must-haves, comma separated (optional)\ne.g. nonstop, 4 nights, 2 adults 2 kids') || '';
-  const web = confirm('Search the web?\n\nOK = search the web (needs an API key)\nCancel = watch my own purchases (free)');
+  const category=(S.dealCats??[]).find(c=>c.key===S.openDeal);
+  S.watchDraft={mode:'custom',dropPct:category?.defaultDropPct??15}; render();
+}
+async function createWatch() {
+  const d=S.watchDraft;if(!d)return;
+  const p=d.mode==='product'?decisionProduct(d.index):null;
+  const name=p?.name??String(d.name??$('watchName')?.value??'').trim();
+  const baseline=p?.price??Number(d.baseline??$('watchBaseline')?.value);
+  const dropPct=Number(d.dropPct??$('watchDrop')?.value);
+  const traits=d.mode==='product'?[p.seller]:String(d.traits??$('watchTraits')?.value??'').split(',').map(x=>x.trim()).filter(Boolean);
+  if(!name||!Number.isFinite(baseline)||baseline<=0||!Number.isFinite(dropPct)||dropPct<1||dropPct>90){
+    S.error='Add a name, today\'s price, and a drop between 1% and 90%.';render();return;
+  }
   try {
-    await api('/api/hunts', { name, ceilingCents: Math.round(parseFloat(ceiling)*100),
-      traits: traits.split(',').map(t=>t.trim()).filter(Boolean),
-      source: web ? 'web' : 'history', category: S.openDeal ?? 'other' });
+    await api('/api/hunts', { name, referencePriceCents:Math.round(baseline*100), alertDropPct:Math.round(dropPct),
+      traits, productUrl:p?.url??null, source:'web', category:S.openDeal??'other' });
+    S.actionNote=`Watching ${name}. Verafi will alert you after a ${Math.round(dropPct)}% drop and recommend buy or wait.`;
+    S.watchDraft=null;
     await load();
   } catch (e) { S.error = e.message; render(); }
+}
+
+function watchSheet(){
+  const d=S.watchDraft;if(!d)return '';
+  const p=d.mode==='product'?decisionProduct(d.index):null;
+  const baseline=Number(p?.price??d.baseline??0), target=baseline?baseline*(1-(d.dropPct??15)/100):0;
+  return `<div class="sheet-backdrop" onclick="if(event.target===this){S.watchDraft=null;render()}"><section class="sheet" role="dialog" aria-modal="true" aria-label="Create price alert">
+    <div class="sheet-handle"></div><div class="sheet-title"><div><span>Price agent</span><h2>${p?esc(p.name):'Create a custom alert'}</h2></div><button aria-label="Close" onclick="S.watchDraft=null;render()">×</button></div>
+    ${p?`<div class="watch-baseline"><span>Price today</span><b>${money(p.price)}</b></div>`:`<label>What should Verafi watch?<input id="watchName" placeholder="Winter coats for both boys" maxlength="80" value="${escAttr(d.name??'')}" oninput="S.watchDraft.name=this.value"/></label><label>Price today / baseline<input id="watchBaseline" type="number" min="1" step="0.01" placeholder="120" value="${escAttr(d.baseline??'')}" oninput="S.watchDraft.baseline=this.value" inputmode="decimal"/></label><label>Must-haves (optional)<input id="watchTraits" placeholder="waterproof, sizes 4T and 5T" value="${escAttr(d.traits??'')}" oninput="S.watchDraft.traits=this.value"/></label>`}
+    <label>Tell me when the price drops by<div class="percent-field"><input id="watchDrop" type="number" min="1" max="90" value="${d.dropPct??15}" oninput="S.watchDraft.dropPct=Number(this.value)" inputmode="numeric"/><span>%</span></div></label>
+    ${baseline?`<div class="trigger-preview"><iconify-icon icon="ph:bell-ringing-bold"></iconify-icon><div><b>Alert at ${money(target)}</b><span>Then Verafi checks the evidence and recommends buy now or keep waiting.</span></div></div>`:''}
+    <div class="quick-pcts">${[10,15,20,25].map(x=>`<button class="${d.dropPct===x?'selected':''}" onclick="S.watchDraft.dropPct=${x};render()">${x}%</button>`).join('')}</div>
+    <button class="btn go" onclick="createWatch()">Start monitoring</button><div class="tiny muted sheet-note">Checked daily. Alerts stop at your trigger; Verafi never buys automatically.</div>
+  </section></div>`;
+}
+
+async function saveCustomCategory(){
+  const budget=Number($('catBudget')?.value), drop=Number($('catDrop')?.value);
+  try{await api('/api/deals/categories',{label:$('catName')?.value,context:$('catContext')?.value,kind:$('catKind')?.value,budgetCents:Math.round(budget*100),defaultDropPct:Math.round(drop)});
+    S.addCategoryOpen=false;await load();}
+  catch(e){S.error=e.message;render();}
+}
+async function deleteCustomCategory(id){
+  if(!confirm('Delete this custom shopping agent? Its existing price alerts will keep running.'))return;
+  await api('/api/deals/categories/delete',{id});await load();
 }
 async function toggleHunt(id, enabled) { await api('/api/hunts/toggle', { id, enabled }); await load(); }
 async function deleteHunt(id) { if (confirm('Delete this price watch?')) { await api('/api/hunts/delete', { id }); await load(); } }
@@ -350,9 +409,9 @@ async function runHunt(id) {
   S.busy = true; render();
   try {
     const r = await api('/api/hunts/run', { id });
-    S.answer = { label:'Price watch result', answer: r.why ?? r.answer ?? (r.matches.length?`Found ${r.matches.length} match — it's in Spend.`:'No match yet.'),
+    S.answer = { label:r.recommendation?.label??'Price watch result', answer: r.why ?? r.answer ?? (r.matches.length?`Found ${r.matches.length} match — it's in Spend.`:'No match yet.'),
                  evidence: r.evidence ?? (r.sources||[]).map(s=>`${s.title||s.url} — ${s.url}`),
-                 steps:[{tool:'price_watch.evaluate',detail:'maximum price enforced on parsed prices'}],
+                 steps:[{tool:'price_watch.evaluate',detail:'your percentage trigger was enforced on verified prices'}],
                  disclaimer:'Price watches surface candidates. They cannot buy.', ok:false };
     await load();
   } catch (e) { S.error = e.message; }
@@ -371,9 +430,9 @@ function viewCategoryDetail(open) {
   const sp = S.spend, cats = sp?.categories ?? [];
   {
     const c = cats.find(x => x.key === open);
-    if (!c) { S.openCat = null; return viewSave(); }
+    if (!c) { S.openCat = null; return viewSpend(); }
     return `
-    <div class="top"><button class="chipbtn" onclick="S.openCat=null;render()">← Save</button>
+    <div class="top"><button class="chipbtn" onclick="S.openCat=null;render()">← Spend</button>
       <span class="sp"></span></div>
     <div class="card">
       <div class="row"><div class="dot">${c.icon}</div>
@@ -404,6 +463,8 @@ function viewCategoryDetail(open) {
 
 function viewSpend() {
   const sp = S.spend;
+  if(S.openCat)return viewCategoryDetail(S.openCat);
+  const cats=sp?.categories??[],max=cats[0]?.cents??1;
   return `
   ${BRAND()}
   <div class="top"><h1>Spend</h1><span class="sp"></span>
@@ -431,8 +492,10 @@ function viewSpend() {
 
   <div class="sec"><span class="lbl">Recent activity</span><span class="act">last 30 days</span></div>
   <div class="card"><div class="row">
-    <span class="tiny muted grow">Spent ${$m0(sp?.totalCents ?? 0)} · full breakdown lives in <b style="color:var(--ink)">Save</b></span>
-    <button class="chipbtn" onclick="S.tab='save';render()">Open</button></div></div>
+    <span class="tiny muted grow">Spent ${$m0(sp?.totalCents ?? 0)} · investments, payments, taxes and transfers excluded</span></div></div>
+
+  <div class="sec"><span class="lbl">Where it went</span><span class="act">tap for detail</span></div>
+  ${cats.map(c=>`<div class="card" onclick="S.openCat='${c.key}';render();scrollTo(0,0)" style="cursor:pointer"><div class="row"><div class="dot">${c.icon}</div><div class="grow"><div class="row"><span class="grow" style="font-size:13px;font-weight:650">${esc(c.label)}</span><b>${$m0(c.cents)}</b></div><div class="bar"><i style="width:${c.cents/max*100}%"></i></div><div class="tiny muted" style="margin-top:4px">${c.share}% · ${c.count} transactions</div></div><span class="muted">›</span></div></div>`).join('')}
 
   <div class="sec"><span class="lbl">Recent</span></div>
   <div class="card">
@@ -443,129 +506,63 @@ function viewSpend() {
   </div>`;
 }
 
-function sparkline(months) {
-  const W=320,H=90,P=4;
-  const all = months.flatMap(m=>[m.bandLowCents,m.bandHighCents]);
-  const mn=Math.min(...all)*0.97, mx=Math.max(...all)*1.03;
-  const x=(i)=>P+i*(W-2*P)/(months.length-1), y=(v)=>H-P-((v-mn)/(mx-mn))*(H-2*P);
-  const line=(k)=>months.map((m,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(m[k]).toFixed(1)).join(' ');
-  const band='M'+months.map((m,i)=>x(i).toFixed(1)+' '+y(m.bandHighCents).toFixed(1)).join(' L')
-    +' L'+months.slice().reverse().map((m,i)=>x(months.length-1-i).toFixed(1)+' '+y(m.bandLowCents).toFixed(1)).join(' L')+' Z';
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">
-    <path d="${band}" fill="var(--save)" opacity=".14"/>
-    <path d="${line('projectedCents')}" fill="none" stroke="var(--save)" stroke-width="2" stroke-linejoin="round"/>
-  </svg>`;
-}
-
 /* ---------------------------------------------------------------- save */
 function viewSave() {
-  const sv = S.save, sp = S.spend, fc = S.forecast, cats = sp?.categories ?? [];
-  const max = cats[0]?.cents ?? 1;
-  const open = S.openCat;
-  if (open) return viewCategoryDetail(open);
+  const sv = S.save, sp = S.spend;
+  const reviews=sv?.reviewQueue??[], actions=sv?.opportunities??[];
+  const potential=[...reviews,...actions].reduce((a,x)=>a+(x.annualCents??0),0);
+  const monitoring=(S.hunts??[]).filter(h=>h.enabled);
   return `
   ${BRAND()}
   <div class="top"><h1>Save</h1><span class="sp"></span>
     <button class="chipbtn" onclick="runAgentsNow()">${S.busy?'<span class="spin"></span>':'↻ recheck'}</button></div>
-  <div class="tiny muted">Purchases worth reviewing, and things worth stopping. Counts only once you've done it.</div>
+  <div class="tiny muted">A decision queue from your agents. Potential savings stay separate until you confirm the action.</div>
 
-  <div class="card" style="border-color:var(--save)">
-    <div class="tiny muted">Confirmed saved</div>
-    <div class="big ok" style="margin-top:4px">${$m(sv?.verifiedTotalCents ?? 0)}</div>
-    <div class="tiny muted" style="margin-top:8px">${sv?.events.length ?? 0} recorded · ${$m0(sv?.totalAnnualOpportunityCents ?? 0)}/yr still on the table</div>
+  <div class="save-summary">
+    <div class="confirmed"><span>Confirmed saved</span><b>${$m0(sv?.verifiedTotalCents??0)}</b><small>${sv?.events.length??0} completed action${(sv?.events.length??0)===1?'':'s'}</small></div>
+    <div><span>Needs your decision</span><b>${reviews.length+actions.length}</b><small>${$m0(potential)}/yr potential · not counted</small></div>
   </div>
 
-  ${(sv?.reviewQueue??[]).length?`
-  <div class="sec"><span class="lbl">Needs your review</span><span class="act">agent candidates · not claimed savings</span></div>
-  ${(sv.reviewQueue??[]).map((o,i)=>`
-    <div class="card agent-review-card">
-      <div class="row" style="align-items:flex-start"><div class="dot"><iconify-icon icon="ph:magnifying-glass-bold"></iconify-icon></div>
-        <div class="grow"><div style="font-weight:700;font-size:13.5px">${esc(o.title)}</div>
-          <div class="tiny muted" style="margin-top:5px;line-height:1.6">${esc(o.detail)}</div>
-          <div class="agent-evidence"><span>${Math.round((o.confidence??0)*100)}% pattern confidence</span><span>${$m0(o.annualCents)} annual cost reviewed</span></div></div></div>
+  <div class="sec"><span class="lbl">Needs your decision</span><button class="act" onclick="S.tab='agent';render()">See agent work →</button></div>
+  ${reviews.map((o,i)=>`
+    <div class="card decision-card review">
+      <div class="decision-status"><span class="badge b-warn">Review needed</span><span>${esc(agentName(o.agent))}</span></div>
+      <div class="row" style="align-items:flex-start"><div class="decision-icon"><iconify-icon icon="ph:magnifying-glass-bold"></iconify-icon></div>
+        <div class="grow"><div class="decision-title">${esc(o.title)}</div>
+          <div class="decision-detail">${esc(o.detail)}</div>
+          <div class="agent-evidence"><span>${Math.round((o.confidence??0)*100)}% pattern confidence</span><span>${$m0(o.annualCents)} annual cost under review</span></div></div></div>
       <div class="row" style="gap:8px;margin-top:10px">
-        <button class="btn go" onclick="claimReview(${i})">I cancelled it</button>
+        <button class="btn go" onclick="claimReview(${i})">Done — count savings</button>
         <button class="btn ghost" onclick="keepReview(${i})">Worth keeping</button>
       </div>
-    </div>`).join('')}`:''}
+    </div>`).join('')}
+  ${actions.map((o,i)=>`
+    <div class="card decision-card ready">
+      <div class="decision-status"><span class="badge b-save">Evidence ready</span><span>${esc(agentName(o.agent))}</span></div>
+      <div class="row" style="align-items:flex-start"><div class="decision-icon"><iconify-icon icon="ph:check-circle-bold"></iconify-icon></div><div class="grow">
+        <div class="decision-title">${esc(o.title)}</div><div class="decision-detail">${esc(o.detail)}</div>
+        <div class="agent-evidence"><span>${$m0(o.annualCents)} annual potential</span><span>not counted yet</span></div></div></div>
+      <button class="btn go" onclick="claim(${i})">Mark completed and count it</button>
+    </div>`).join('')}
+  ${!reviews.length&&!actions.length?`<div class="card empty-decision"><iconify-icon icon="ph:check-circle-bold"></iconify-icon><b>No decisions waiting</b><span>Your agents found no evidence-backed savings action in the current data. Open Agents to see what each one checked.</span><button class="btn ghost" onclick="S.tab='agent';render()">Review agent investigations</button></div>`:''}
 
-  <div class="sec"><span class="lbl">What you actually spend</span><span class="act">last 30 days</span></div>
-  <div class="card"><div class="tiny muted">Total spent</div>
-    <div class="big" style="margin-top:4px">${$m0(sp?.totalCents ?? 0)}</div>
-    <div class="tiny muted" style="margin-top:6px">Investments, card payments, taxes and transfers excluded — see Pay</div></div>
+  ${monitoring.length||sp?.uncategorisedShare>5?`<div class="sec"><span class="lbl">In progress</span><span class="act">agents still working</span></div>
+  <div class="card progress-list">
+    ${monitoring.length?`<button class="progress-row" onclick="S.tab='ask';render()"><iconify-icon icon="ph:bell-ringing-bold"></iconify-icon><span><b>${monitoring.length} price agent${monitoring.length===1?'':'s'} monitoring</b><small>${monitoring.map(h=>h.name).slice(0,2).map(esc).join(' · ')}</small></span><em>Shop →</em></button>`:''}
+    ${sp?.uncategorisedShare>5?`<button class="progress-row" onclick="teachNext()"><iconify-icon icon="ph:tag-bold"></iconify-icon><span><b>${sp.uncategorisedShare}% needs categorization</b><small>${(S.unknowns||[]).length} merchant${(S.unknowns||[]).length===1?'':'s'} need your input</small></span><em>Review →</em></button>`:''}
+  </div>`:''}
 
-  <div class="sec"><span class="lbl">Categories</span><span class="act">tap to open</span></div>
-  ${cats.map(c=>`
-    <div class="card" onclick="S.openCat='${c.key}';render();scrollTo(0,0)" style="cursor:pointer">
-      <div class="row">
-        <div class="dot">${c.icon}</div>
-        <div class="grow">
-          <div class="row"><span style="font-size:13.5px;font-weight:650" class="grow">${esc(c.label)}</span>
-            <span style="font-weight:650">${$m0(c.cents)}</span></div>
-          <div class="bar" style="margin-top:7px"><i style="width:${c.cents/max*100}%"></i></div>
-          <div class="row" style="margin-top:5px">
-            <span class="tiny grow" style="color:var(--dim)">${c.subs.slice(0,3).map(s=>title(s.key)).join(' · ')}</span>
-            <span class="tiny muted">${c.share}%</span></div>
-        </div>
-        <span class="muted" style="margin-left:2px">›</span>
-      </div>
-    </div>`).join('') || '<div class="card"><div class="tiny muted">No spending in this period.</div></div>'}
+  <div class="sec"><span class="lbl">Savings confirmed</span><span class="act">your completed actions</span></div>
+  ${sv?.events.length?`<div class="card confirmed-ledger">${sv.events.map((e,i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
+    <div class="decision-icon done"><iconify-icon icon="ph:check-bold"></iconify-icon></div><div class="grow"><div style="font-size:13px;font-weight:650">${esc(e.evidence?.note??title(e.method))}</div>
+      <div class="tiny muted" style="margin-top:2px">${new Date(e.createdAt).toLocaleDateString()} · ${title(e.method)}</div></div>
+    <div style="font-weight:750;color:var(--save)">${$m0(e.amountCents+e.amountCents*e.recurringMonths)}</div></div>`).join('')}</div>`
+    :'<div class="card"><div class="tiny muted">Nothing counted yet. Verafi records savings only after you confirm the action.</div></div>'}`;
+}
 
-  ${S.insight?.ok ? `
-  <div class="card" style="border-color:var(--spend)">
-    <div class="row" style="align-items:flex-start">
-      <div class="dot" style="background:color-mix(in srgb,var(--spend) 14%,transparent)">✦</div>
-      <div class="grow"><div style="font-weight:650;font-size:14px;line-height:1.45">${esc(S.insight.headline)}</div></div>
-    </div>
-    ${(S.insight.items||[]).map(it=>`
-      <div style="margin-top:12px;padding-top:11px;border-top:1px solid var(--line)">
-        <div class="tiny" style="line-height:1.6">${esc(it.why)}</div>
-        <div class="tiny ok" style="margin-top:5px;line-height:1.5">→ ${esc(it.action)}</div>
-      </div>`).join('')}
-    <div class="tiny" style="color:var(--dim);margin-top:11px">Reasoned by the agent · amounts computed in code, never by the model</div>
-  </div>` : (S.state?.llm === false ? `
-  <div class="card" style="border-style:dashed">
-    <div class="tiny muted" style="line-height:1.6"><b style="color:var(--ink)">Findings are rule-based right now.</b>
-    The configured free model is not allowed to read personal financial details unless you explicitly opt in. Exact findings still run locally; model reasoning is shown only when the privacy gate permits it.</div>
-  </div>` : '')}
-
-  ${sp?.uncategorisedShare > 5 ? `<div class="card" style="border-color:var(--warn)">
-    <div class="tiny" style="line-height:1.6"><b style="color:var(--warn)">${sp.uncategorisedShare}% uncategorised.</b>
-    No rule list covers every merchant. Tell me what these are and I'll remember them permanently.</div>
-    ${S.state?.llm ? `<button class="btn go" onclick="autoCategorise()">${S.busy?'Thinking…':'Let the agent categorise them'}</button>`:''}
-    <button class="btn ghost" onclick="teachNext()">Do it myself (${(S.unknowns||[]).length} left)</button>
-  </div>` : ''}
-
-  ${fc ? `<div class="sec"><span class="lbl">12-month forecast</span><span class="act">with bands</span></div>
-  <div class="card">
-    ${sparkline(fc.months)}
-    <div class="tiny muted" style="margin-top:11px;padding-top:11px;border-top:1px solid var(--line);line-height:1.6">
-      Acting on what's in Save trends monthly spend from <b style="color:var(--ink)">${$m0(fc.months[0].projectedCents)}</b>
-      to <b class="ok">${$m0(fc.months[11].projectedCents)}</b>. The shaded band is real uncertainty — the wide part needs <i>you</i> to change, not just the app.
-    </div>
-  </div>` : ''}
-
-
-  <div class="sec"><span class="lbl">Worth stopping</span><span class="act">${(sv?.opportunities??[]).length} found</span></div>
-  ${(sv?.opportunities ?? []).map((o,i)=>`
-    <div class="card">
-      <div class="row" style="align-items:flex-start">
-        <div class="grow">
-          <div style="font-weight:650;font-size:13.5px;line-height:1.4">${esc(o.title)}</div>
-          <div class="tiny muted" style="margin-top:6px;line-height:1.6">${esc(o.detail)}</div>
-          <div class="tiny" style="color:var(--dim);margin-top:7px">${esc(o.agent.replace(/_/g,' '))}</div>
-        </div>
-        <div style="text-align:right;flex:0 0 auto"><div style="font-weight:700;color:var(--save)">${$m0(o.annualCents)}</div>
-          <div class="tiny muted">a year</div></div>
-      </div>
-      <button class="btn ghost" onclick="claim(${i})">I did this — count it</button>
-    </div>`).join('') || '<div class="card"><div class="tiny muted">No opportunities found yet. Switch more agents on in ⚙, or import more history.</div></div>'}
-
-  ${sv?.events.length ? `<div class="sec"><span class="lbl">Ledger</span></div>
-  <div class="card">${sv.events.map((e,i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}>
-    <div class="grow"><div style="font-size:13px;font-weight:600">${title(e.method)}</div>
-      <div class="tiny muted" style="margin-top:2px">${new Date(e.createdAt).toLocaleDateString()} · ${esc(e.evidence?.note ?? e.evidence?.kind ?? '')}</div></div>
-    <div style="font-weight:700;color:var(--save)">${$m(e.amountCents + e.amountCents*e.recurringMonths)}</div></div>`).join('')}</div>`:''}`;
+function agentName(id='') {
+  const a=(S.state?.agentReview?.agents??[]).find(x=>x.id===id);
+  return a?.label??title(id||'Agent');
 }
 
 /* ---------------------------------------------------------------- wallet */
@@ -646,6 +643,7 @@ function cardRecommendations(cards) {
 function viewAgent() {
   const st = S.state, f = st.findings ?? [];
   const review=st.agentReview??{coverage:{},agents:[]};
+  const customCats=(S.dealCats??[]).filter(c=>c.custom);
   const CAP = { observe:'Watches and flags', recommend:'Researches and advises',
                 execute_authorized:'Acts with your approval', execute_preauthorized:'Acts inside a signed limit' };
   return `
@@ -676,7 +674,8 @@ function viewAgent() {
   ${(st.agents ?? []).map((a,i)=>{
     const audit=review.agents?.find(x=>x.label===a.name);
     const mine = f.filter(x => x.agent === (audit?.id ?? a.name.toLowerCase().replace(/\s+/g,'_')));
-    return `<div class="card" style="${a.enabled?'':'opacity:.6'}">
+    const expanded=S.openAgent===a.id;
+    return `<div class="card agent-card" style="${a.enabled?'':'opacity:.6'}">
       <div class="row" style="align-items:flex-start">
         <div class="grow">
           <div class="row" style="gap:6px"><span style="font-weight:650;font-size:13.5px">${esc(a.name)}</span>
@@ -690,7 +689,28 @@ function viewAgent() {
         </div>
         <div class="tog ${a.enabled?'on':''}" onclick="toggleAgent('${a.id}',${!a.enabled})"><i></i></div>
       </div>
+      <button class="agent-expand" onclick="S.openAgent=S.openAgent==='${a.id}'?null:'${a.id}';render()">${expanded?'Hide investigation':'View investigation'} <span>${expanded?'⌃':'⌄'}</span></button>
+      ${expanded?`<div class="agent-investigation">
+        <div><span>What it checked</span><b>${esc(audit?.scope??'No defined scope')}</b></div>
+        <div><span>Current result</span><b>${a.enabled?`${audit?.candidates??0} candidates · ${audit?.confirmed??0} confirmed · ${audit?.needsReview??0} need review`:'Agent is off'}</b></div>
+        <div><span>Evidence</span><b>${mine.length?esc(mine.map(x=>x.title).slice(0,3).join(' · ')):`No finding passed this agent's evidence threshold.`}</b></div>
+        <div><span>Next action</span><b>${esc(audit?.next??CAP[a.capability]??a.capability)}</b></div>
+        <div class="agent-method"><iconify-icon icon="ph:shield-check-bold"></iconify-icon><span>${st.llmProvider?.allowPersonal?'Local calculations find exact amounts; the reasoning model prioritizes and explains them.':'This agent ran locally. The free model did not inspect personal financial details.'}</span></div>
+      </div>`:''}
     </div>`;}).join('')}
+
+  ${customCats.length?`<div class="sec"><span class="lbl">Custom shopping agents</span><span class="act">created by you</span></div>
+  ${customCats.map(c=>{const watches=(S.hunts??[]).filter(h=>h.category===c.key);return `<div class="card agent-card"><div class="row" style="align-items:flex-start"><div class="decision-icon"><iconify-icon icon="${esc(c.icon)}"></iconify-icon></div><div class="grow">
+    <div class="row" style="gap:6px"><b style="font-size:13.5px">${esc(c.label)}</b><span class="badge b-spend">custom</span></div><div class="tiny muted" style="margin-top:5px;line-height:1.55">${esc(c.context)}</div>
+    <div class="agent-counts"><span>$${c.budget} budget</span><span>${c.defaultDropPct}% default alert</span><span>${watches.length} active watch${watches.length===1?'':'es'}</span></div></div></div>
+    <button class="agent-expand" onclick="S.openDeal='${c.key}';S.tab='ask';render();scrollTo(0,0)">Research this category <span>→</span></button></div>`;}).join('')}`:''}
+
+  ${(S.hunts??[]).length?`<div class="sec"><span class="lbl">Shopping agents</span><span class="act">custom price triggers</span></div>
+  ${(S.hunts??[]).map(h=>`<div class="card agent-card"><div class="row" style="align-items:flex-start"><div class="decision-icon"><iconify-icon icon="ph:bell-ringing-bold"></iconify-icon></div><div class="grow">
+    <div class="row" style="gap:6px"><b style="font-size:13.5px">${esc(h.name)}</b><span class="badge ${h.recommendation?.status==='buy_now'?'b-save':'b-spend'}">${esc(h.recommendation?.label??'Monitoring')}</span></div>
+    <div class="tiny muted" style="margin-top:5px;line-height:1.55">${esc(h.summary)}</div><div class="tiny" style="color:var(--dim);margin-top:6px">${esc(h.recommendation?.detail??'Waiting for its first price check.')}</div></div>
+    <div class="tog ${h.enabled?'on':''}" onclick="toggleHunt('${h.id}',${!h.enabled})"><i></i></div></div>
+    <button class="agent-expand" onclick="runHunt('${h.id}')">Check current price <span>→</span></button></div>`).join('')}`:''}
 
   <div class="sec"><span class="lbl">Activity log</span><span class="act">${(st.runs??[]).length} runs</span></div>
   <div class="card">
