@@ -375,10 +375,11 @@ computed by deterministic code, with exact amounts. Your job:
 Hard rules:
 - NEVER invent, change or round a dollar amount. Use exactly the figures given.
 - If the findings are trivial, say so plainly rather than inflating them.
+- A finding marked REVIEW ONLY is an unresolved candidate, not savings. Ask for the missing decision and never present its annual cost as recoverable.
 - No motivational filler. Talk like a smart friend who has seen the numbers.
 Return JSON: {"headline":"...","items":[{"ref":"<agent:ref>","why":"...","action":"..."}]}`,
     user: `Their situation: ${context}\n\nFindings:\n` +
-      findings.slice(0,12).map(f => `[${f.agent}:${f.ref}] ${f.title} — $${Math.round(f.annualCents/100)}${f.oneOff?' one-off':'/yr'}. ${f.detail}`).join('\n')
+      findings.slice(0,12).map(f => `[${f.agent}:${f.ref}]${f.reviewOnly?' REVIEW ONLY':''} ${f.title} — ${f.reviewOnly?'annual cost reviewed':'$'+Math.round(f.annualCents/100)+(f.oneOff?' one-off':'/yr')}. ${f.detail}`).join('\n')
   });
   if (!out.ok) return out;
   try {

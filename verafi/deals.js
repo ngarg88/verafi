@@ -13,6 +13,7 @@
  */
 import { expensesOnly } from './classify.js';
 import { complete, providerInfo } from './llm.js';
+import { normalizeTransactions } from './categories.js';
 
 /**
  * COGS MODEL
@@ -40,6 +41,40 @@ export const COST = Object.freeze({
 
 const DAY = 86400000;
 const f0 = c => '$' + Math.round(c/100).toLocaleString('en-US');
+
+const QUERY_CATEGORIES = [
+  ['dining', /restaurant|dining|dinner|lunch|brunch|breakfast|prix.?fixe|menu|takeout|delivery|coffee|bar\b/i],
+  ['travel', /flight|hotel|trip|travel|vacation|holiday|resort|airbnb|cruise|rental car/i],
+  ['shopping', /clothing|shoe|sneaker|laptop|phone|electronics|furniture|watch|jewel|carry.?on|luggage|suitcase/i],
+  ['entertainment', /concert|show|movie|event|ticket|activity/i],
+  ['grocery', /grocery|supermarket|food shopping/i]
+];
+
+export function categoryForDealQuery(query='') {
+  return QUERY_CATEGORIES.find(([, re]) => re.test(query))?.[0] ?? null;
+}
+
+export function purchaseContext(query, tx, now=Date.now()) {
+  const category = categoryForDealQuery(query);
+  const ex = normalizeTransactions(expensesOnly(tx)).filter(t => t.amountCents > 0 && t.postedAt > now - 365*DAY);
+  const hits = category ? ex.filter(t => t.category === category) : [];
+  const amounts = hits.map(t=>t.amountCents).sort((a,b)=>a-b);
+  const cities = hits.map(t=>[t.location?.city,t.location?.region].filter(Boolean).join(', ')).filter(Boolean);
+  const commonLocation = cities.length
+    ? Object.entries(cities.reduce((a,c)=>(a[c]=(a[c]??0)+1,a),{})).sort((a,b)=>b[1]-a[1])[0][0]
+    : null;
+  return {
+    category,
+    transactionCount:hits.length,
+    spentYearCents:hits.reduce((a,t)=>a+t.amountCents,0),
+    typicalCents:amounts.length ? amounts[Math.floor(amounts.length/2)] : null,
+    commonLocation,
+    statement: hits.length
+      ? `${hits.length} ${category} purchases reviewed across the last 12 months`
+      : category ? `No ${category} purchases were found in the available history; live research still ran`
+      : 'Live research ran without needing a matching past purchase'
+  };
+}
 
 export function parseDealDecision(text, sources, images = []) {
   const raw = String(text ?? '').trim();
@@ -114,7 +149,7 @@ export const DEAL_CATEGORIES = {
  * anchored to what they have actually spent rather than numbers we invented.
  */
 export function dealPresets(tx, now = Date.now()) {
-  const ex = expensesOnly(tx);
+  const ex = normalizeTransactions(expensesOnly(tx));
   const yr = ex.filter(t => t.postedAt > now - 365*DAY && t.amountCents > 0);
   const byCat = {};
   for (const t of yr) byCat[t.category] = (byCat[t.category] ?? 0) + t.amountCents;
@@ -126,11 +161,12 @@ export function dealPresets(tx, now = Date.now()) {
     const largest = Math.max(0, ...yr.filter(t => def.match.test(t.category)).map(t=>t.amountCents));
     // budget anchor: their biggest single purchase in the category, else a twelfth of the year
     const budget = Math.round((largest || spent/12) / 100) || 250;
+    const matches = yr.filter(t => def.match.test(t.category));
     out.push({
       key, icon: def.icon, label: def.label,
       spentYearCents: spent,
-      basis: spent ? `You spent $${Math.round(spent/100).toLocaleString()} here in the last year`
-                   : 'No spending here yet — budget is a starting guess',
+      basis: spent ? `${matches.length} purchases · $${Math.round(spent/100).toLocaleString()} in the last year`
+                   : 'No matching history yet — research still works',
       budget,
       asks: def.asks({ budget })
     });
@@ -140,7 +176,7 @@ export function dealPresets(tx, now = Date.now()) {
 
 /** Does this read like "find me something to buy" rather than "analyse my spending"? */
 export function isDealQuery(q) {
-  return /\b(find|best|deal|cheap|book|trip|vacation|holiday|flight|hotel|resort|all.?inclusive|buy|shop|looking for|recommend|compare|sale|price|worth it|under \$)\b/i.test(q ?? '');
+  return /\b(find|best|deals?|cheap(?:er|est)?|book|trip|vacation|holiday|flights?|hotels?|resorts?|all.?inclusive|buy|shop|looking for|recommend|compare|sales?|prices?|worth it|under \$|restaurants?|dining|prix.?fixe|menus?)\b/i.test(q ?? '');
 }
 
 /**
@@ -188,7 +224,7 @@ export function approvalSummary(item, tx) {
 
 /** What we know about this user, so the answer is theirs and not generic. */
 export function spendingContext(tx, now = Date.now()) {
-  const ex = expensesOnly(tx);
+  const ex = normalizeTransactions(expensesOnly(tx));
   const last90 = ex.filter(t => t.postedAt > now - 90*DAY && t.amountCents > 0);
   const monthly = Math.round(last90.reduce((a,t)=>a+t.amountCents,0) / 3);
   const travel = ex.filter(t => t.category === 'travel' && t.amountCents > 0);
@@ -219,6 +255,7 @@ export function spendingContext(tx, now = Date.now()) {
  */
 export async function researchDeal({ query, tx, model = 'claude-sonnet-5', meter }) {
   const ctx = spendingContext(tx);
+  const personalContext = purchaseContext(query, tx);
   // search: true — this call needs a provider that can actually reach the live web.
   // Without this flag, provider selection ignores that requirement and can hand back
   // a provider (Groq, Cerebras, ...) that will always refuse a search request.
@@ -228,14 +265,14 @@ export async function researchDeal({ query, tx, model = 'claude-sonnet-5', meter
   if (meter && meter.monthUsd >= COST.monthlyCapUsd) return {
     ok: false, capped: true,
     answer: `You've used $${meter.monthUsd.toFixed(2)} of research this month, which is the cap. It resets next month, or raise RESEARCH_MONTHLY_CAP_USD on the server.`,
-    context: ctx
+    context: ctx, personalContext
   };
 
   // Identical question inside 24h returns the cached answer for free. Travel prices do
   // not move minute to minute, and this alone removes most repeat cost.
   const cacheKey = (query ?? '').trim().toLowerCase();
   if (meter?.cache?.[cacheKey] && Date.now() - meter.cache[cacheKey].at < 86400000) {
-    return { ...meter.cache[cacheKey].result, cached: true };
+    return { ...meter.cache[cacheKey].result, personalContext, cached: true };
   }
 
   // providerInfo({ search: true }) only returns a provider that can reach the live
@@ -249,7 +286,7 @@ export async function researchDeal({ query, tx, model = 'claude-sonnet-5', meter
       'Set LLM_PROVIDER=openrouter, OPENROUTER_MODEL to a :free model, and ZERO_SPEND_MODE=1',
       'Then: sudo systemctl restart verafi'
     ],
-    context: ctx
+    context: ctx, personalContext
   };
 
   // On a provider that trains on prompts, send the budget number and nothing else about
@@ -265,6 +302,7 @@ Rules:
 - If you cannot find current prices, say so plainly. Do not estimate.
 - Return ONLY one JSON object. No markdown or prose outside JSON.
 - Each product must cite one supplied source by its 1-based sourceIndex. Never invent a URL.
+- Use merchant product or booking pages as product sources, not review articles, listicles, or search-result pages.
 - If an available product image clearly matches the named product, include its 1-based imageIndex. Otherwise use null.
 - Use short factual highlights and one honest tradeoff per product.
 
@@ -280,7 +318,7 @@ Context: ${safeContext}.`;
   });
 
   if (!out.ok) return {
-    ok: false, context: ctx,
+    ok: false, context: ctx, personalContext,
     answer: out.reason === 'timeout'
       ? 'The search took too long and was stopped. Try a narrower question.'
       : out.reason === 'privacy_blocked' ? out.detail
@@ -298,7 +336,7 @@ Context: ${safeContext}.`;
     ok: true,
     answer: decision?.summary || answer,
     decision,
-    sources, context: ctx, provider: out.provider,
+    sources, context: ctx, personalContext, provider: out.provider,
     costUsd: +costUsd.toFixed(4),
     disclaimer: 'Research only. This agent cannot book or pay for anything.'
   };

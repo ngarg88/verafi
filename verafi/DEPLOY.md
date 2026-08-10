@@ -71,16 +71,16 @@ box**. Anything that runs a long-lived Node process with a persistent disk.
 
 ## The agents that run
 
-All five are `observe`/`recommend` — **nothing in this app spends money.** That stays behind
+All agents are `observe`/`recommend` — **nothing in this app spends money.** That stays behind
 the policy engine and a biometric, which is a different build.
 
 | Agent | What it does | Fires when |
 |---|---|---|
-| **Subscription Auditor** | Finds things still billing you that you stopped using | A charge cadence continues past ~1.8× its normal gap with no usage |
-| **Fee Catcher** | Overdraft, ATM and FX fees worth disputing | Any new fee transaction |
-| **Duplicate Watch** | Same merchant, same amount, within 3 days | Possible double-charge |
+| **Subscription Auditor** | Builds a review queue of active fixed recurring charges; it does not infer usage | 3+ fixed charges on a stable active cadence |
+| **Fee Catcher** | Overdraft, ATM and FX fees worth disputing | A qualifying fee in the last 12 months |
+| **Duplicate Watch** | Rare merchant, same amount, same day | Possible double-charge with both transactions available |
 | **Budget Pacer** | A category on pace to overrun your normal | Past the 25% mark of a month and tracking >30% above your 90-day average |
-| **Card Router** | Which of your cards earns most where | You spent >$200 in a category where a card you hold pays more |
+| **Card Router** | Which tagged card earns most where | Attributable purchases prove a lower-multiplier card was used and the estimated gap is material |
 
 Switch them on in the app. They dedupe — you're told about a finding once, not daily.
 

@@ -209,6 +209,23 @@ export function categorise(description, plaidCategory) {
   return { category: 'other', subcategory: 'unknown', confidence: 0.2, matched: null };
 }
 
+/** One category decision for every surface. Raw importer/Plaid categories are fallback
+ * evidence, never separate vocabularies that let Shop and Spend disagree. */
+export function effectiveCategory(t, learned=null) {
+  let c=applyLearned(t.merchantName??t.merchantId,learned)
+    ?? categorise(t.merchantName??t.merchantId,t.plaidCategory??t.category);
+  if(c.category==='other'&&t.category&&TAXONOMY[t.category]&&t.category!=='other')
+    c={category:t.category,subcategory:'unknown',confidence:.5,matched:'source category'};
+  return c;
+}
+
+export function normalizeTransactions(txs, learned=null) {
+  return txs.map(t=>{
+    const c=effectiveCategory(t,learned);
+    return c.category===t.category?t:{...t,category:c.category,subcategory:c.subcategory};
+  });
+}
+
 /** Everything Spend needs to render a drill-down, in one pass. */
 export function categoriseAll(txs, learned = null) {
   const cats = {};
@@ -218,10 +235,7 @@ export function categoriseAll(txs, learned = null) {
     // importer guessed. The old category is only a fallback when nothing matches.
     // Order matters: our specific rules first, then whatever the aggregator said,
     // and only then "other". Dumping straight to "other" is what made this useless.
-    let c = applyLearned(t.merchantName ?? t.merchantId, learned)
-         ?? categorise(t.merchantName ?? t.merchantId, t.category);
-    if (c.category === 'other' && t.category && TAXONOMY[t.category] && t.category !== 'other')
-      c = { category: t.category, subcategory: 'unknown', confidence: 0.5 };
+    let c = effectiveCategory(t,learned);
     if (c.category === 'other' && t.plaidCategory) {
       const g = categorise('', t.plaidCategory);
       if (g.category !== 'other') c = g;

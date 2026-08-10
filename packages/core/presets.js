@@ -26,7 +26,7 @@ export function deriveSignals(transactions, now = Date.now()) {
         merchantId, cadenceDays: +mean.toFixed(1),
         amountCents: txs[txs.length - 1].amountCents,
         daysSinceLast: +((now - last) / DAY).toFixed(1),
-        dormant: (now - last) / DAY > mean * 1.8   // paying but not using
+        dormant: (now - last) / DAY > mean * 1.8   // cadence appears to have stopped; usage is unknown
       });
     }
   }
@@ -58,8 +58,8 @@ export function proposeAgents(signals, userId) {
                evidence, confidence });
 
   if (signals.dormantSubscriptions.length > 0)
-    add(SURFACE.SAVE, 'Subscription Auditor', CAPABILITY.EXECUTE_AUTHORIZED,
-      `${signals.dormantSubscriptions.length} subscriptions unused for 30+ days right now`, 0.91);
+    add(SURFACE.SAVE, 'Subscription Auditor', CAPABILITY.RECOMMEND,
+      `${signals.dormantSubscriptions.length} recurring streams appear to have stopped and need review`, 0.68);
 
   if (signals.misroutedSpendCents > 50_000)
     add(SURFACE.SAVE, 'Card Router', CAPABILITY.RECOMMEND,

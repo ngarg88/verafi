@@ -33,23 +33,29 @@ export class Plaid {
   createLinkToken(userId) {
     return this.call('/link/token/create', {
       user: { client_user_id: userId }, client_name: 'Verafi',
-      products: ['transactions'], country_codes: ['US'], language: 'en'
+      products: ['transactions'], country_codes: ['US'], language: 'en',
+      // Plaid defaults to 90 days. That is too short for annual renewals and
+      // trustworthy recurring-spend analysis.
+      transactions: { days_requested: 730 }
     });
   }
   exchange(publicToken)      { return this.call('/item/public_token/exchange', { public_token: publicToken }); }
   accounts(accessToken)      { return this.call('/accounts/get', { access_token: accessToken }); }
   institution(id)            { return this.call('/institutions/get_by_id', { institution_id: id, country_codes:['US'] }); }
-  sync(accessToken, cursor)  { return this.call('/transactions/sync', { access_token: accessToken, ...(cursor ? { cursor } : {}), count: 500 }); }
+  sync(accessToken, cursor)  { return this.call('/transactions/sync', {
+    access_token: accessToken, ...(cursor ? { cursor } : {}), count: 500,
+    options: { include_original_description:true, personal_finance_category_version:'v2' }
+  }); }
 
   /** Pull everything Plaid will give us, following the cursor to the end. */
   async syncAll(accessToken, cursor) {
-    let added = [], modified = [], removed = [], more = true, cur = cursor;
+    let added = [], modified = [], removed = [], more = true, cur = cursor, updateStatus = null;
     while (more) {
       const p = await this.sync(accessToken, cur);
       added.push(...p.added); modified.push(...p.modified); removed.push(...p.removed);
-      cur = p.next_cursor; more = p.has_more;
+      cur = p.next_cursor; more = p.has_more; updateStatus = p.transactions_update_status ?? updateStatus;
     }
-    return { added, modified, removed, cursor: cur };
+    return { added, modified, removed, cursor: cur, updateStatus };
   }
 }
 
@@ -69,7 +75,16 @@ export function toCoreTx(t, instrumentByAccount = {}) {
     amountCents: Math.round(t.amount * 100),          // Plaid: positive = money out
     postedAt: new Date(t.datetime ?? t.authorized_date ?? t.date).getTime(),
     localHour: t.datetime ? new Date(t.datetime).getHours() : 13,
-    category: map[cat] ?? cat, mcc: null,
+    category: map[cat] ?? cat,
+    plaidCategory: cat,
+    plaidDetail: (t.personal_finance_category?.detailed ?? '').toLowerCase(),
+    originalDescription: t.original_description ?? null,
+    merchantWebsite: t.website ?? null,
+    location: t.location ? {
+      city:t.location.city ?? null, region:t.location.region ?? null,
+      postalCode:t.location.postal_code ?? null, country:t.location.country ?? null
+    } : null,
+    mcc: t.merchant_entity_id ?? null,
     isFee: cat === 'bank_fees' || /\bfee\b|overdraft|atm surcharge/i.test(t.name ?? ''),
     pending: !!t.pending,
     cardRewardMultiplier: 1, bestAvailableMultiplier: 1
