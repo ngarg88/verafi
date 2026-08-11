@@ -47,6 +47,23 @@ function recurringProfile(list, now=Date.now()) {
   };
 }
 
+/** Two clear subscription-shaped charges are enough to ask for review, but never to
+ * claim savings. This recovers useful candidates from short Plaid history windows. */
+function reviewRecurringProfile(list, now=Date.now()) {
+  const strict = recurringProfile(list, now);
+  if (strict) return strict;
+  if (list.length < 2) return null;
+  const sorted=list.slice().sort((a,b)=>a.postedAt-b.postedAt);
+  const last=sorted.at(-1), prior=sorted.at(-2);
+  const cadenceDays=(last.postedAt-prior.postedAt)/DAY;
+  const amountDelta=Math.abs(last.amountCents-prior.amountCents)/Math.max(1,last.amountCents);
+  if (!((cadenceDays>=20&&cadenceDays<=45)||(cadenceDays>=75&&cadenceDays<=110)||(cadenceDays>=300&&cadenceDays<=400))) return null;
+  if (amountDelta>.1) return null;
+  return {cadenceDays,daysSinceLast:(now-last.postedAt)/DAY,amountCents:last.amountCents,
+    count:sorted.length,category:last.category,lastSeen:last.postedAt,
+    active:(now-last.postedAt)/DAY<=cadenceDays*1.8,relaxed:true};
+}
+
 /** Merchants where "you stopped going" means nothing — you just shop elsewhere. */
 const NOT_A_MEMBERSHIP_RE = /amazon|whole ?foods|trader ?joe|safeway|kroger|publix|wegmans|albertsons|costco|target|walmart|shell|chevron|exxon|mobil|uber|lyft|doordash|grubhub|instacart|starbucks|dunkin|cvs|walgreens|amzn|7.?eleven|wawa/i;
 
@@ -75,7 +92,7 @@ export const AGENTS = {
       const out = [];
       for (const [merchantId,list] of Object.entries(byMerchant)) {
         if (NOT_A_MEMBERSHIP.test(merchantId) || EXPECTED_RECURRING.test(merchantId)) continue;
-        const p = recurringProfile(list, now);
+        const p = reviewRecurringProfile(list, now);
         if (!p?.active) continue;
         const merchantText = String(list.at(-1)?.merchantName ?? merchantId);
         const likely = ['subscription','fitness'].includes(p.category)
@@ -85,7 +102,7 @@ export const AGENTS = {
         out.push({
           agent:'subscription_auditor', ref:`subscription:${merchantId}`,
           title:`Review ${pretty(merchantId)}`,
-          detail:`A fixed ${fmt(p.amountCents)} charge has repeated ${p.count} times about every ${Math.round(p.cadenceDays)} days. Verafi confirmed the billing pattern, but cannot know whether you still use it without your review.`,
+          detail:`A ${fmt(p.amountCents)} charge repeated ${p.count} times about every ${Math.round(p.cadenceDays)} days. Verafi confirmed a recurring pattern${p.relaxed?' from the available history':''}, but cannot know whether you still use it without your review.`,
           amountCents:p.amountCents, annualCents:p.amountCents*periods,
           action:'review_subscription', reviewOnly:true,
           confidence:p.category==='subscription'?.9:.72,
@@ -108,8 +125,19 @@ export const AGENTS = {
                                && (t.isFee || FEE_RE.test(t.merchantName ?? t.merchantId ?? ''))
                                && !NOT_DISPUTABLE.test(t.merchantName ?? t.merchantId ?? '')
                                && t.amountCents >= 500);
-      return fees.map(t => {
-        const kind = /overdraft|nsf|insufficient/i.test(t.merchantName ?? '') ? 'overdraft'
+      // Consolidate overlapping imports. The same fee arriving from Plaid and a CSV
+      // must never become two cards or two dollars of claimed savings.
+      const grouped = new Map();
+      for (const t of fees) {
+        const day=new Date(t.postedAt).toISOString().slice(0,10);
+        const merchant=String(t.merchantName??t.merchantId??'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+        const sig=`${t.instrumentId??t.accountId??'unknown'}:${day}:${t.amountCents}:${merchant}`;
+        const g=grouped.get(sig)??{...t,matchingRows:0,ids:[]};
+        g.matchingRows++;g.ids.push(t.externalId);grouped.set(sig,g);
+      }
+      return [...grouped.values()].map(t => {
+        const kind = /overdraft|\bnsf\b|insufficient/i.test(t.merchantName ?? '') ? 'overdraft'
+                   : /wire (transfer )?fee|fee.*wire transfer/i.test(t.merchantName ?? '') ? 'wire transfer'
                    : /atm|surcharge/i.test(t.merchantName ?? '')             ? 'ATM'
                    : /foreign|fx|international/i.test(t.merchantName ?? '')  ? 'foreign transaction'
                    : /late/i.test(t.merchantName ?? '')                      ? 'late payment'
@@ -123,14 +151,15 @@ export const AGENTS = {
           'late payment': 'Ask for a one-time waiver, then set autopay for the minimum so it cannot recur.',
           annual: 'Call retention and ask what they can do. Downgrade to a no-fee version if the answer is nothing.',
           'account maintenance': 'Usually waived by direct deposit or a minimum balance. Ask which applies.',
+          'wire transfer': 'This is a wire fee, not an overdraft. If the transfer was not urgent, compare ACH or an account with included wires before the next one.',
           bank: 'Call and ask for a waiver. Worst case they say no.'
         }[kind];
         return {
-          agent: 'fee_catcher', ref: t.externalId,
+          agent: 'fee_catcher', ref: `fee:${t.instrumentId??t.accountId??'unknown'}:${new Date(t.postedAt).toISOString().slice(0,10)}:${t.amountCents}:${kind}`,
           title: `${fmt(t.amountCents)} ${kind} fee - ${pretty(t.merchantName ?? t.merchantId)}`,
-          detail: `Charged ${new Date(t.postedAt).toLocaleDateString()}. ${advice}`,
+          detail: `Charged ${new Date(t.postedAt).toLocaleDateString()}. ${advice}${t.matchingRows>1?` This appeared ${t.matchingRows} times across imported data; Verafi consolidated it and counted it once pending verification.`:''}`,
           amountCents: t.amountCents, annualCents: t.amountCents, oneOff: true,
-          action: 'dispute', evidence: { txId: t.externalId, postedAt: t.postedAt, kind }
+          action: 'dispute', evidence: { txIds:t.ids, postedAt:t.postedAt, kind, matchingRows:t.matchingRows }
         };
       });
     }
@@ -207,7 +236,23 @@ export const AGENTS = {
       const recent = tx.filter(t => t.postedAt > now - 90*DAY && t.amountCents > 0 &&
                                     ['dining','shopping','retail','entertainment'].includes(t.category));
       if (recent.length < 15) return [];
-      const late = recent.filter(t => t.localHour >= 21 || t.localHour <= 3);
+      const withTime=recent.filter(t=>Number.isFinite(t.localHour));
+      // Plaid normally has a date, not a time. Use a factual recent-vs-prior drift
+      // check instead of leaving this agent permanently unable to report anything.
+      if (withTime.length < Math.min(10,recent.length*.5)) {
+        const cutoff=now-45*DAY, priorCutoff=now-90*DAY;
+        const current=recent.filter(t=>t.postedAt>cutoff);
+        const prior=recent.filter(t=>t.postedAt<=cutoff&&t.postedAt>priorCutoff);
+        const currentCents=current.reduce((a,t)=>a+t.amountCents,0);
+        const priorCents=prior.reduce((a,t)=>a+t.amountCents,0);
+        if (current.length<8||prior.length<8||currentCents<=priorCents*1.3) return [];
+        return [{agent:'weekend_drift',ref:`drift:${new Date(now).toISOString().slice(0,7)}`,
+          title:'Discretionary spending increased in the last 45 days',
+          detail:`${fmt(currentCents)} across ${current.length} purchases versus ${fmt(priorCents)} across ${prior.length} in the prior 45 days. This is a factual change to review, not proof of waste.`,
+          amountCents:currentCents-priorCents,annualCents:currentCents-priorCents,oneOff:true,alertOnly:true,
+          action:'review',evidence:{currentCents,priorCents,currentCount:current.length,priorCount:prior.length,timeOfDayAvailable:false}}];
+      }
+      const late = withTime.filter(t => t.localHour >= 21 || t.localHour <= 3);
       if (!late.length) return [];
       const lateTotal = late.reduce((a,t)=>a+t.amountCents,0);
       const share = late.length / recent.length;
@@ -282,6 +327,8 @@ export const AGENTS = {
 
       const recent = tx.filter(t => t.postedAt > since && t.amountCents > 1000
                                  && !HIGH_FREQUENCY.has(t.category)
+                                 && t.category !== 'fee' && !t.isFee
+                                 && !FEE_RE.test(t.merchantName ?? t.merchantId ?? '')
                                  && !scheduled.has(t.merchantId)
                                  && !INVESTMENT_ISH.test(t.merchantName ?? t.merchantId ?? '')
                                  && !EXPECTED_RECURRING.test(t.merchantName ?? t.merchantId ?? '')
@@ -387,6 +434,16 @@ export const AGENTS = {
 
 const fmt = (c) => '$' + (c/100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pretty = (s) => String(s ?? '').replace(/[-_]/g,' ').replace(/\b\w/g, m => m.toUpperCase());
+const findingSignature = (f) => JSON.stringify([f.amountCents,f.annualCents,f.title,f.evidence??{}]);
+function validFinding(f,id){
+  const amount=Number(f?.amountCents),annual=Number(f?.annualCents);
+  const evidence=f?.evidence&&typeof f.evidence==='object'&&Object.keys(f.evidence).length>0;
+  const valid=!!f&&f.agent===id&&typeof f.ref==='string'&&f.ref.length>2&&
+    typeof f.title==='string'&&f.title.trim().length>4&&typeof f.detail==='string'&&f.detail.trim().length>12&&
+    Number.isFinite(amount)&&amount>=0&&Number.isFinite(annual)&&annual>=0&&evidence;
+  if(!valid)console.warn(`agent ${id} dropped a finding that failed its evidence contract`);
+  return valid;
+}
 
 /**
  * Run every ENABLED agent, drop anything already reported, and return what's new.
@@ -408,7 +465,13 @@ export function runAgents({ store, now = Date.now(), lookbackDays = 45, cardRule
     try { found = agent.run({ tx, now, since, cardRules, instruments: D.instruments }) ?? []; }
     catch (e) { found = []; console.error(`agent ${id} failed:`, e.message); }
     for (const f of found) {
-      if (D.dismissed[key(f)]) continue;      // you said no; we do not ask again
+      if(!validFinding(f,id))continue;
+      const dismissed=D.dismissed[key(f)];
+      // A dismissal applies to the evidence the user reviewed, not forever. Reopen when
+      // the amount/evidence changes; migrate legacy timestamp-only dismissals after 90 days.
+      if (dismissed && (typeof dismissed==='object'
+        ? dismissed.signature===findingSignature(f)
+        : now-dismissed<90*DAY)) continue;
       all.push(f);
       if (!D.seenFindings[key(f)]) { D.seenFindings[key(f)] = now; fresh.push(f); }
     }
@@ -430,30 +493,39 @@ export function reviewAgents({ data, now=Date.now(), cardRules={} }) {
   const tx = normalizeTransactions(expensesOnly(data.transactions ?? []),data.learned);
   const byMerchant = {};
   for (const t of tx) if (t.amountCents>0) (byMerchant[t.merchantId] ??= []).push(t);
-  const recurring = Object.entries(byMerchant).map(([merchantId,list])=>({ merchantId, profile:recurringProfile(list,now) }))
+  const recurring = Object.entries(byMerchant).map(([merchantId,list])=>({ merchantId, profile:reviewRecurringProfile(list,now) }))
     .filter(x=>x.profile);
   const oldest = tx.length ? Math.min(...tx.map(t=>t.postedAt)) : null;
   const newest = tx.length ? Math.max(...tx.map(t=>t.postedAt)) : null;
   const enabled = new Set((data.agents??[]).filter(a=>a.enabled).map(a=>a.name));
   const findings = data.findings ?? [];
   const defs = {
-    subscription_auditor:{ candidates:recurring.filter(x=>x.profile.active).length, scope:'fixed recurring charges and renewal cadence', next:'Review every active recurring candidate; confirm use before claiming savings' },
-    fee_catcher:{ candidates:tx.filter(t=>t.isFee||FEE_RE.test(t.merchantName??'')).length, scope:'bank, ATM, foreign, late and maintenance fees', next:'Verify waiver eligibility and prepare the exact dispute' },
-    price_creep:{ candidates:recurring.length, scope:'fixed recurring prices over time', next:'Separate a true plan increase from a changing basket' },
-    overlap_watch:{ candidates:recurring.filter(x=>x.profile.active).length, scope:'active services with overlapping jobs', next:'Ask which service is actually used before recommending cancellation' },
-    weekend_drift:{ candidates:tx.filter(t=>['dining','shopping','entertainment'].includes(t.category)).length, scope:'90-day discretionary timing and ticket size', next:'Compare late and daytime behavior without annualizing a habit' },
-    dormant_spend:{ candidates:recurring.filter(x=>!x.profile.active).length, scope:'previously steady charges that stopped', next:'Treat as a question, never proof that billing continues' },
-    duplicate_watch:{ candidates:tx.filter(t=>t.postedAt>now-45*DAY).length, scope:'same-day, same-amount rare-merchant charges', next:'Show both transactions before suggesting a dispute' },
-    budget_pacer:{ candidates:new Set(tx.filter(t=>t.postedAt>now-90*DAY).map(t=>t.category)).size, scope:'current pace versus the prior 90 days', next:'Flag only material, controllable categories' },
-    card_router:{ candidates:tx.filter(t=>t.postedAt>now-90*DAY&&t.instrumentId).length, scope:'purchases attributable to a tagged linked card', next:'Calculate only proven multiplier gaps' }
+    subscription_auditor:{ candidates:recurring.filter(x=>x.profile.active).length, scope:'fixed recurring charges and renewal cadence', next:'Review every active recurring candidate; confirm use before claiming savings', clear:'No active recurring charge met the review threshold.' },
+    fee_catcher:{ candidates:tx.filter(t=>t.isFee||FEE_RE.test(t.merchantName??'')).length, scope:'bank, ATM, wire, foreign, late and maintenance fees', next:'Verify waiver eligibility and prepare the exact dispute', clear:'No qualifying avoidable fee was found.' },
+    price_creep:{ candidates:recurring.length, scope:'fixed recurring prices over time', next:'Separate a true plan increase from a changing basket', clear:'No fixed recurring price rose by at least 12%.' },
+    overlap_watch:{ candidates:recurring.filter(x=>x.profile.active).length, scope:'active services with overlapping jobs', next:'Ask which service is actually used before recommending cancellation', clear:'No two active services had a clear overlapping job.' },
+    weekend_drift:{ candidates:tx.filter(t=>['dining','shopping','entertainment'].includes(t.category)).length, scope:'90-day discretionary trend, timing and ticket size', next:'Compare recent and prior behavior without annualizing a habit', clear:'Recent discretionary behavior did not materially exceed the comparison period.' },
+    dormant_spend:{ candidates:recurring.filter(x=>!x.profile.active).length, scope:'previously steady charges that stopped', next:'Treat as a question, never proof that billing continues', clear:'No stopped recurring pattern needed follow-up.' },
+    duplicate_watch:{ candidates:tx.filter(t=>t.postedAt>now-45*DAY).length, scope:'same-day, same-amount rare-merchant charges', next:'Show both transactions before suggesting a dispute', clear:'No rare-merchant pair met the duplicate threshold.' },
+    budget_pacer:{ candidates:new Set(tx.filter(t=>t.postedAt>now-90*DAY).map(t=>t.category)).size, scope:'current pace versus the prior 90 days', next:'Flag only material, controllable categories', clear:'No material category is pacing at least 30% above its recent normal.' },
+    card_router:{ candidates:tx.filter(t=>t.postedAt>now-90*DAY&&t.instrumentId).length, scope:'purchases attributable to a tagged linked card', next:'Calculate only proven multiplier gaps',
+      blocker:(data.instruments??[]).some(i=>i.rail==='card_credit'&&i.cardKey)?null:'Tag each linked credit card with its reward profile to run this comparison' }
   };
   return {
     coverage:{ transactions:tx.length, merchants:Object.keys(byMerchant).length,
       oldestAt:oldest, newestAt:newest, days:oldest&&newest?Math.max(1,Math.round((newest-oldest)/DAY)):0,
       attributableToAccount:tx.filter(t=>t.instrumentId).length },
-    agents:Object.entries(AGENTS).map(([id,a])=>({ id,label:a.label,enabled:enabled.has(a.label),
-      confirmed:findings.filter(f=>f.agent===id&&!f.reviewOnly).length,
-      needsReview:findings.filter(f=>f.agent===id&&f.reviewOnly).length,
-      candidates:defs[id]?.candidates??0,scope:defs[id]?.scope,next:defs[id]?.next }))
+    agents:Object.entries(AGENTS).map(([id,a])=>{
+      const confirmed=findings.filter(f=>f.agent===id&&!f.reviewOnly).length;
+      const needsReview=findings.filter(f=>f.agent===id&&f.reviewOnly).length;
+      const candidates=defs[id]?.candidates??0, blocker=defs[id]?.blocker??null;
+      return {id,label:a.label,enabled:enabled.has(a.label),confirmed,needsReview,candidates,
+        scope:defs[id]?.scope,next:defs[id]?.next,blocker,
+        status:blocker?'needs_setup':confirmed?'finding':needsReview?'review':candidates?'investigated':'no_evidence',
+        result:blocker?`Needs setup: ${blocker}`:confirmed?`${confirmed} evidence-backed finding${confirmed===1?'':'s'}`:
+          needsReview?`${needsReview} item${needsReview===1?' needs':'s need'} your review`:
+          candidates?`${candidates} candidate${candidates===1?'':'s'} checked. ${defs[id]?.clear??'Nothing met the evidence threshold.'}`:
+          'No qualifying evidence was available in the current history.'};
+    })
   };
 }

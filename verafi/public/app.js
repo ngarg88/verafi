@@ -23,9 +23,10 @@ const esc = (s) => String(s ?? '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;
 const escAttr = (s) => esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const title = (s) => String(s ?? '').replace(/[-_]/g,' ').replace(/\b\w/g, m => m.toUpperCase());
 
-const S = { tab:'ask', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, unknowns:null, taxonomy:null, insight:null, lastQuery:null, spend:null, save:null, busy:false, error:null, compare:[], compareOpen:false, actionNote:null, addCategoryOpen:false, watchDraft:null, openAgent:null };
+const S = { tab:'home', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, unknowns:null, taxonomy:null, insight:null, lastQuery:null, spend:null, spendDays:30, save:null, busy:false, error:null, compare:[], compareOpen:false, actionNote:null, addCategoryOpen:false, watchDraft:null, openAgent:null, modal:null };
 
 const ICONS = {
+  home:'<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/>',
   ask:'<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
   spend:'<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M2 9.5h20"/>',
   save:'<path d="M12 3v18"/><path d="M17 7.5c0-2-2.2-3-5-3s-5 1-5 3 2.2 2.7 5 3.3 5 1.4 5 3.4-2.2 3.3-5 3.3-5-1.2-5-3.2"/>',
@@ -33,14 +34,22 @@ const ICONS = {
   agent:'<path d="M12 3 4 6.5v5c0 4.4 3.2 8.3 8 9.5 4.8-1.2 8-5.1 8-9.5v-5L12 3Z"/><path d="m9 12 2 2 4-4"/>'
 };
 
+function go(tab){S.tab=tab;S.openCat=null;S.openDeal=null;render();scrollTo(0,0);}
+function openModal(kind,data={}){S.modal={kind,...data};render();setTimeout(()=>$('modalPrimary')?.focus(),30);}
+function closeModal(){S.modal=null;render();}
+
 async function load() {
   try { S.state = await api('/api/state'); S.locked = false; }
   catch (e) { if (/locked/i.test(e.message)) { S.locked = true; S.state = null; return render(); } throw e; }
   if (S.state.linked) {
+    // Agent evaluation is an explicit capability request, never a hidden mutation in
+    // Home's read endpoint. Load Save first, then refresh the read-only dashboard state.
+    const firstSave = await api('/api/save').catch(e => ({ __failed:'/api/save', __error:e.message }));
+    if(!firstSave.__failed)S.state=await api('/api/state');
     // One missing endpoint must never blank the whole app. Each call fails on its own.
     const safe = (p) => api(p).catch(e => ({ __failed: p, __error: e.message }));
     const [sp, sv, cd, rs, dc, wl, hu, un, ins] = await Promise.all([
-      safe('/api/spend?days=30'), safe('/api/save'),
+      safe(`/api/spend?days=${S.spendDays}`), Promise.resolve(firstSave),
       safe('/api/cards'), safe('/api/research'), safe('/api/deals/presets'), safe('/api/deals/watchlist'), safe('/api/hunts'), safe('/api/unknowns'), safe('/api/insight')
     ]);
     const failed = [sp,sv,cd,rs,dc,wl,hu,un,ins].filter(x => x?.__failed).map(x => x.__failed);
@@ -91,7 +100,7 @@ function viewOnboard() {
   return `
   <div class="top"><h1>Verafi</h1><span class="sp"></span>
     <button class="chipbtn" onclick="toggleTheme()">◐</button></div>
-  <p class="muted" style="font-size:14px;line-height:1.6">Connect your accounts and Verafi will build a private review of your spending. Transactions stay on this machine. Generic shopping searches may go to your configured search provider; personal financial details remain behind the privacy gate.</p>
+  <p class="muted" style="font-size:14px;line-height:1.6">Connect your accounts and Verafi will build a private review of your spending. Your financial history stays in your private Verafi environment. Generic shopping searches may use an external search provider; personal financial details remain behind the privacy gate.</p>
 
   <div class="sec"><span class="lbl">Option 1 · live connection</span></div>
   <div class="card">
@@ -99,22 +108,63 @@ function viewOnboard() {
     <div class="tiny muted" style="margin-top:6px;line-height:1.55">
       ${st.plaidConfigured
         ? `Running in <b>${st.plaidEnv}</b> mode.${st.plaidEnv==='sandbox' ? ' Use <code>user_good</code> / <code>pass_good</code> to test with fake data.' : ' This will connect your <b>real</b> accounts.'}`
-        : 'Not configured yet. Copy <code>verafi/.env.example</code> → <code>verafi/.env</code> and add your Plaid keys.'}
+        : 'Bank connection is not available yet. You can import a statement now and connect a bank later.'}
     </div>
     <button class="btn ${st.plaidConfigured?'go':''}" ${st.plaidConfigured?'':'disabled'} onclick="linkPlaid()">
-      ${st.plaidConfigured ? 'Connect with Plaid' : 'Add Plaid keys first'}</button>
+      ${st.plaidConfigured ? 'Connect with Plaid' : 'Bank connection unavailable'}</button>
   </div>
 
   <div class="sec"><span class="lbl">Option 2 · no third party at all</span></div>
   <div class="card">
     <div style="font-weight:650;font-size:14px">Import a CSV or OFX from your bank</div>
     <div class="tiny muted" style="margin-top:6px;line-height:1.55">Every US bank lets you export statements. Nobody but you ever sees your credentials, and it costs nothing. Good enough to test the whole product today.</div>
-    <div class="drop" id="drop" style="margin-top:12px" onclick="$('file').click()">
+    <div class="drop" id="drop" role="button" tabindex="0" aria-label="Choose a statement file to import" style="margin-top:12px" onclick="$('file').click()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();$('file').click()}">
       Drop a .csv / .ofx / .qfx here<br/><span class="tiny">or tap to choose</span>
     </div>
     <input type="file" id="file" accept=".csv,.ofx,.qfx,.txt" style="display:none" onchange="importFiles(this.files)"/>
   </div>
   ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}`;
+}
+
+/* ---------------------------------------------------------------- home */
+function viewHome() {
+  const st=S.state, sp=S.spend, sv=S.save;
+  const reviews=sv?.reviewQueue??[], actions=sv?.opportunities??[];
+  const findings=st.findings??[], watches=(S.hunts??[]).filter(h=>h.enabled);
+  const confirmed=findings.filter(f=>!f.reviewOnly&&!f.alertOnly).length;
+  const top=(sp?.categories??[]).slice().sort((a,b)=>b.cents-a.cents)[0];
+  const agentReview=st.agentReview?.agents??[];
+  const needsSetup=agentReview.filter(a=>a.blocker).length;
+  const latest=findings.slice(0,3);
+  return `
+  ${BRAND()}
+  <div class="top home-top"><div><span class="eyebrow">Your money, today</span><h1>What needs attention</h1></div><span class="sp"></span>
+    <button class="chipbtn" aria-label="Setup" onclick="go('settings')">⚙</button></div>
+
+  <button class="home-priority" onclick="go('${reviews.length||actions.length?'save':'agent'}')">
+    <span class="priority-icon"><iconify-icon icon="ph:sparkle-fill"></iconify-icon></span>
+    <span><small>${reviews.length+actions.length?'Next best action':'Agent check-in'}</small>
+      <b>${reviews.length+actions.length?`${reviews.length+actions.length} decision${reviews.length+actions.length===1?'':'s'} waiting`:'Review what your agents checked'}</b>
+      <em>${reviews.length+actions.length?`${reviews.length} need review · ${actions.length} ready to act — nothing counted yet`:`${confirmed} evidence-backed finding${confirmed===1?'':'s'} in the current data`}</em></span><strong>›</strong>
+  </button>
+
+  <div class="home-grid">
+    <button onclick="go('spend')"><span>Last 30 days</span><b>${$m0(sp?.totalCents??0)}</b><small>${top?`${esc(top.label)} is the largest category`:'Open spending detail'}</small></button>
+    <button onclick="go('save')"><span>Confirmed saved</span><b class="money-good">${$m0(sv?.verifiedTotalCents??0)}</b><small>${sv?.events?.length??0} completed action${(sv?.events?.length??0)===1?'':'s'}</small></button>
+    <button onclick="go('agent')"><span>Agent findings</span><b>${confirmed+reviews.length}</b><small>${reviews.length} need your review${needsSetup?` · ${needsSetup} need setup`:''}</small></button>
+    <button onclick="go('ask')"><span>Price watches</span><b>${watches.length}</b><small>${watches.filter(h=>h.recommendation?.status==='buy_now').length} at buy-now trigger</small></button>
+  </div>
+
+  <div class="sec"><span class="lbl">Agent activity</span><button class="act" onclick="go('agent')">See all →</button></div>
+  ${latest.length?latest.map(f=>`<button class="home-finding" onclick="go('${f.reviewOnly?'save':'agent'}')"><span class="finding-dot ${f.reviewOnly?'review':'found'}"></span><span><b>${esc(f.title)}</b><small>${esc(f.detail)}</small></span><em>${f.reviewOnly?'Review':'Evidence'}</em></button>`).join(''):
+    `<button class="home-finding" onclick="go('agent')"><span class="finding-dot neutral"></span><span><b>No surfaced finding yet</b><small>Open Agents to see candidate depth, blockers, and the next investigation for each agent.</small></span><em>Inspect</em></button>`}
+
+  <div class="sec"><span class="lbl">Quick actions</span></div>
+  <div class="home-actions">
+    <button onclick="go('ask')"><iconify-icon icon="ph:magnifying-glass-bold"></iconify-icon><span><b>Research a purchase</b><small>Compare live options</small></span><em>›</em></button>
+    <button onclick="go('save')"><iconify-icon icon="ph:check-square-offset-bold"></iconify-icon><span><b>Review savings</b><small>Decide what to act on</small></span><em>›</em></button>
+    <button onclick="go('wallet')"><iconify-icon icon="ph:credit-card-bold"></iconify-icon><span><b>Cards & accounts</b><small>${st.coverage?.cards??0} linked cards · balances and rewards</small></span><em>›</em></button>
+  </div>`;
 }
 
 /* ---------------------------------------------------------------- shop */
@@ -133,7 +183,7 @@ function viewShop() {
       <div class="tiny muted" style="margin-top:3px">${esc(c.basis)}</div></div></div>
     </div>
     <div class="sec"><span class="lbl">Ask the agent</span><span class="act">budget ~$${c.budget}</span></div>
-    ${c.asks.map((a,i)=>`<div class="card" onclick="doCategoryAsk('${c.key}',${i})" style="cursor:pointer">
+    ${c.asks.map((a,i)=>`<div class="card" role="button" tabindex="0" onclick="doCategoryAsk('${c.key}',${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();doCategoryAsk('${c.key}',${i})}" style="cursor:pointer">
       <div class="row"><span class="grow" style="font-size:13.5px;line-height:1.45">${esc(a)}</span><span class="muted">›</span></div></div>`).join('')}
     <div class="card">
       <input id="q" placeholder="or ask your own…" style="border:0;padding:4px 0;font-size:15px"
@@ -159,10 +209,8 @@ function viewShop() {
     <button class="btn go" onclick="doAsk()">${S.busy?'Researching…':'Find it'}</button>
   </div>
 
-  ${watch.length ? `<div class="card" onclick="S.tab='spend';render()" style="cursor:pointer;border-color:var(--save)">
-    <div class="row"><span class="grow tiny" style="line-height:1.5">
-      <b style="color:var(--ink)">${watch.length} item${watch.length>1?'s':''} waiting in Spend</b> for you to review and buy.</span>
-      <span class="muted">›</span></div></div>` : ''}
+  ${watch.length ? `<div class="sec"><span class="lbl">Saved shopping</span><span class="act">${watch.length} waiting</span></div>
+  ${watch.map(w=>{const moved=w.foundPriceCents-w.currentPriceCents;return `<div class="card" style="border-color:var(--save)"><div class="row" style="align-items:flex-start"><div class="grow"><div style="font-size:13.5px;font-weight:650;line-height:1.4">${esc(w.title)}</div><div class="tiny muted" style="margin-top:5px">Current ${$m0(w.currentPriceCents)} · target ${$m0(w.targetCents)}</div>${moved>0?`<div class="tiny ok" style="margin-top:3px">↓ ${$m0(moved)} since saved</div>`:''}</div></div><div class="row" style="gap:8px;margin-top:10px"><button class="btn go" onclick="approveDeal('${w.id}')">Open merchant</button><button class="btn ghost" style="width:auto;padding:13px 16px" onclick="openModal('dropDeal',{id:'${w.id}',name:'${escAttr(w.title)}'})">Remove</button></div></div>`;}).join('')}` : ''}
 
   <div class="sec"><span class="lbl">Price watches</span>
     <button class="act" onclick="newHunt()">+ new</button></div>
@@ -177,19 +225,19 @@ function viewShop() {
           <div class="tiny" style="color:var(--dim);margin-top:5px">
             ${h.runs} checks${h.matches.length?` · ${h.matches.length} match${h.matches.length>1?'es':''}`:' · nothing yet'}</div>
         </div>
-        <div class="tog ${h.enabled?'on':''}" onclick="toggleHunt('${h.id}',${!h.enabled})"><i></i></div>
+        <button class="tog ${h.enabled?'on':''}" role="switch" aria-checked="${h.enabled}" aria-label="${h.enabled?'Disable':'Enable'} ${escAttr(h.name)}" onclick="toggleHunt('${h.id}',${!h.enabled})"><i></i></button>
       </div>
       <div class="row" style="gap:8px;margin-top:10px">
         <button class="btn ghost" onclick="runHunt('${h.id}')">${S.busy?'Checking…':'Check now'}</button>
-        <button class="btn ghost" style="width:auto;padding:13px 16px" onclick="deleteHunt('${h.id}')">✕</button>
+        <button class="btn ghost" style="width:auto;padding:13px 16px" aria-label="Delete ${escAttr(h.name)}" onclick="deleteHunt('${h.id}','${escAttr(h.name)}')">✕</button>
       </div>
     </div>`).join('')
-   : `<div class="card"><div class="tiny muted" style="line-height:1.6">No price watches yet. Set a maximum price and your requirements; Verafi checks daily and puts matching options in Spend for your review.</div></div>`}
+   : `<div class="card"><div class="tiny muted" style="line-height:1.6">No price watches yet. Set a maximum price and your requirements; Verafi checks daily and keeps matching options here in Shop.</div></div>`}
 
   <div class="sec"><span class="lbl">Your categories</span><button class="act" onclick="S.addCategoryOpen=!S.addCategoryOpen;render()">${S.addCategoryOpen?'close':'+ add your own'}</button></div>
   ${S.addCategoryOpen ? customCategoryForm() : ''}
   ${cats.map(c=>`
-    <div class="card category-card" onclick="S.openDeal='${c.key}';S.answer=null;render();scrollTo(0,0)" style="cursor:pointer">
+    <div class="card category-card" role="button" tabindex="0" onclick="S.openDeal='${c.key}';S.answer=null;render();scrollTo(0,0)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();S.openDeal='${c.key}';S.answer=null;render();scrollTo(0,0)}" style="cursor:pointer">
       <div class="row">
         <div class="dot">${categoryIcon(c)}</div>
         <div class="grow"><div style="font-size:13.5px;font-weight:650">${esc(c.label)}</div>
@@ -315,7 +363,7 @@ function visitProduct(i){ const u=safeUrl(decisionProduct(i)?.url);if(u)open(u,'
 async function saveProduct(i){
   const p=decisionProduct(i); if(!p)return;
   await api('/api/deals/hold',{title:p.name,url:safeUrl(p.url),priceCents:Math.round(p.price*100),category:S.openDeal??'other',notes:p.tradeoff||p.why});
-  S.actionNote=`${p.name} was saved to Spend.`; await load();
+  S.actionNote=`${p.name} was saved in Shop.`; await load();
 }
 async function watchProduct(i){
   const p=decisionProduct(i); if(!p)return;
@@ -331,7 +379,9 @@ async function doAsk(preset, presetQuery, categoryKey=null) {
   S.busy = true; S.error = null; S.answer = null; S.lastQuery = q; S.compare=[];S.compareOpen=false;S.actionNote=null; render();
   // Never let a hung request look like a dead button.
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 30000);
+  // Live search and ranking have separate server budgets. The client waits long enough
+  // for the grounded fallback rather than aborting while the server is still working.
+  const t = setTimeout(() => ctrl.abort(), 55000);
   try {
     const r = await fetch('/api/ask', { method:'POST', signal: ctrl.signal,
       headers:{'content-type':'application/json'}, body: JSON.stringify({ query: q, preset, categoryKey:categoryKey??S.openDeal }) });
@@ -339,7 +389,7 @@ async function doAsk(preset, presetQuery, categoryKey=null) {
     S.answer = await r.json();
   } catch (e) {
     S.error = e.name === 'AbortError'
-      ? 'That took over 30 seconds and was stopped. The server may be busy — try again.'
+      ? 'Research could not finish after 55 seconds. Nothing was charged; try again or make the request more specific.'
       : e.message;
   } finally { clearTimeout(t); S.busy = false; render(); }
 }
@@ -349,12 +399,7 @@ function doCategoryAsk(categoryKey,index){
 }
 
 async function holdFromAnswer() {
-  const title = (S.lastQuery || 'Saved deal').slice(0, 80);
-  const price = prompt('Price you found (in dollars, numbers only):');
-  if (!price) return;
-  await api('/api/deals/hold', { title, priceCents: Math.round(parseFloat(price)*100),
-    category: S.openDeal ?? 'other', url: '' });
-  await load();
+  openModal('holdDeal',{name:(S.lastQuery||'Saved deal').slice(0,80)});
 }
 async function newHunt() {
   const category=(S.dealCats??[]).find(c=>c.key===S.openDeal);
@@ -400,16 +445,15 @@ async function saveCustomCategory(){
   catch(e){S.error=e.message;render();}
 }
 async function deleteCustomCategory(id){
-  if(!confirm('Delete this custom shopping agent? Its existing price alerts will keep running.'))return;
-  await api('/api/deals/categories/delete',{id});await load();
+  openModal('deleteCategory',{id});
 }
 async function toggleHunt(id, enabled) { await api('/api/hunts/toggle', { id, enabled }); await load(); }
-async function deleteHunt(id) { if (confirm('Delete this price watch?')) { await api('/api/hunts/delete', { id }); await load(); } }
+async function deleteHunt(id,name) { openModal('deleteHunt',{id,name}); }
 async function runHunt(id) {
   S.busy = true; render();
   try {
     const r = await api('/api/hunts/run', { id });
-    S.answer = { label:r.recommendation?.label??'Price watch result', answer: r.why ?? r.answer ?? (r.matches.length?`Found ${r.matches.length} match — it's in Spend.`:'No match yet.'),
+    S.answer = { label:r.recommendation?.label??'Price watch result', answer: r.why ?? r.answer ?? (r.matches.length?`Found ${r.matches.length} match — it is saved in Shop.`:'No match yet.'),
                  evidence: r.evidence ?? (r.sources||[]).map(s=>`${s.title||s.url} — ${s.url}`),
                  steps:[{tool:'price_watch.evaluate',detail:'your percentage trigger was enforced on verified prices'}],
                  disclaimer:'Price watches surface candidates. They cannot buy.', ok:false };
@@ -469,33 +513,15 @@ function viewSpend() {
   ${BRAND()}
   <div class="top"><h1>Spend</h1><span class="sp"></span>
     <button class="chipbtn" onclick="refresh()">${S.busy?'<span class="spin"></span>':'↻'}</button></div>
-  <div class="tiny muted">Agent-found decisions ready for you, followed by the activity they used.</div>
+  <div class="tiny muted">Your spending activity and category breakdown. Shopping research and saved products stay in Shop.</div>
+  <div class="period-picker" role="group" aria-label="Spending period">${[30,90,365].map(d=>`<button class="${S.spendDays===d?'selected':''}" onclick="setSpendDays(${d})">${d===365?'1 year':`${d} days`}</button>`).join('')}</div>
 
-  ${(S.watchlist ?? []).length ? `
-  <div class="sec"><span class="lbl">Ready to act</span><span class="act">${S.watchlist.length} queued</span></div>
-  ${S.watchlist.map(w=>{
-    const moved = w.foundPriceCents - w.currentPriceCents;
-    return `<div class="card" style="border-color:var(--spend)">
-      <div class="row" style="align-items:flex-start">
-        <div class="grow"><div style="font-size:13.5px;font-weight:650;line-height:1.4">${esc(w.title)}</div>
-          <div class="tiny muted" style="margin-top:5px">Found at ${$m0(w.foundPriceCents)} · auto-flags at ${$m0(w.targetCents)}</div>
-          ${moved>0?`<div class="tiny ok" style="margin-top:3px">↓ ${$m0(moved)} since you saved it</div>`:''}</div>
-        <div style="text-align:right"><div style="font-weight:700">${$m0(w.currentPriceCents)}</div></div>
-      </div>
-      <div class="row" style="gap:8px;margin-top:10px">
-        <button class="btn go" onclick="approveDeal('${w.id}')">Buy at merchant</button>
-        <button class="btn ghost" style="width:auto;padding:13px 16px" onclick="dropDeal('${w.id}')">Drop</button>
-      </div>
-    </div>`;}).join('')}
-  <div class="tiny" style="color:var(--dim);margin-top:8px;line-height:1.5">The button opens the verified merchant page immediately. Verafi does not insert a checkout or handle your card.</div>
-  ` : `<div class="card"><div class="tiny muted">Nothing queued. Find something in <b style="color:var(--ink)">Shop</b> and hold it — it lands here for review.</div></div>`}
-
-  <div class="sec"><span class="lbl">Recent activity</span><span class="act">last 30 days</span></div>
+  <div class="sec"><span class="lbl">Recent activity</span><span class="act">last ${S.spendDays===365?'year':`${S.spendDays} days`}</span></div>
   <div class="card"><div class="row">
     <span class="tiny muted grow">Spent ${$m0(sp?.totalCents ?? 0)} · investments, payments, taxes and transfers excluded</span></div></div>
 
   <div class="sec"><span class="lbl">Where it went</span><span class="act">tap for detail</span></div>
-  ${cats.map(c=>`<div class="card" onclick="S.openCat='${c.key}';render();scrollTo(0,0)" style="cursor:pointer"><div class="row"><div class="dot">${c.icon}</div><div class="grow"><div class="row"><span class="grow" style="font-size:13px;font-weight:650">${esc(c.label)}</span><b>${$m0(c.cents)}</b></div><div class="bar"><i style="width:${c.cents/max*100}%"></i></div><div class="tiny muted" style="margin-top:4px">${c.share}% · ${c.count} transactions</div></div><span class="muted">›</span></div></div>`).join('')}
+  ${cats.map(c=>`<div class="card" role="button" tabindex="0" onclick="S.openCat='${c.key}';render();scrollTo(0,0)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();S.openCat='${c.key}';render();scrollTo(0,0)}" style="cursor:pointer"><div class="row"><div class="dot">${c.icon}</div><div class="grow"><div class="row"><span class="grow" style="font-size:13px;font-weight:650">${esc(c.label)}</span><b>${$m0(c.cents)}</b></div><div class="bar"><i style="width:${c.cents/max*100}%"></i></div><div class="tiny muted" style="margin-top:4px">${c.share}% · ${c.count} transactions</div></div><span class="muted">›</span></div></div>`).join('')}
 
   <div class="sec"><span class="lbl">Recent</span></div>
   <div class="card">
@@ -509,17 +535,18 @@ function viewSpend() {
 /* ---------------------------------------------------------------- save */
 function viewSave() {
   const sv = S.save, sp = S.spend;
-  const reviews=sv?.reviewQueue??[], actions=sv?.opportunities??[];
+  const reviews=sv?.reviewQueue??[], actions=sv?.opportunities??[], alerts=sv?.alerts??[];
+  const workflows=(sv?.actions??[]).filter(a=>a.status==='action_started'||a.status==='awaiting_verification');
   const potential=[...reviews,...actions].reduce((a,x)=>a+(x.annualCents??0),0);
   const monitoring=(S.hunts??[]).filter(h=>h.enabled);
   return `
   ${BRAND()}
   <div class="top"><h1>Save</h1><span class="sp"></span>
     <button class="chipbtn" onclick="runAgentsNow()">${S.busy?'<span class="spin"></span>':'↻ recheck'}</button></div>
-  <div class="tiny muted">A decision queue from your agents. Potential savings stay separate until you confirm the action.</div>
+  <div class="tiny muted">Find an opportunity, take action, then verify the financial outcome. Only verified results count as savings.</div>
 
   <div class="save-summary">
-    <div class="confirmed"><span>Confirmed saved</span><b>${$m0(sv?.verifiedTotalCents??0)}</b><small>${sv?.events.length??0} completed action${(sv?.events.length??0)===1?'':'s'}</small></div>
+    <div class="confirmed"><span>Verified saved</span><b>${$m0(sv?.verifiedTotalCents??0)}</b><small>${sv?.events.length??0} outcome${(sv?.events.length??0)===1?'':'s'} with proof</small></div>
     <div><span>Needs your decision</span><b>${reviews.length+actions.length}</b><small>${$m0(potential)}/yr potential · not counted</small></div>
   </div>
 
@@ -532,7 +559,7 @@ function viewSave() {
           <div class="decision-detail">${esc(o.detail)}</div>
           <div class="agent-evidence"><span>${Math.round((o.confidence??0)*100)}% pattern confidence</span><span>${$m0(o.annualCents)} annual cost under review</span></div></div></div>
       <div class="row" style="gap:8px;margin-top:10px">
-        <button class="btn go" onclick="claimReview(${i})">Done — count savings</button>
+        <button class="btn go" onclick="startReview(${i})">Start action</button>
         <button class="btn ghost" onclick="keepReview(${i})">Worth keeping</button>
       </div>
     </div>`).join('')}
@@ -542,12 +569,16 @@ function viewSave() {
       <div class="row" style="align-items:flex-start"><div class="decision-icon"><iconify-icon icon="ph:check-circle-bold"></iconify-icon></div><div class="grow">
         <div class="decision-title">${esc(o.title)}</div><div class="decision-detail">${esc(o.detail)}</div>
         <div class="agent-evidence"><span>${$m0(o.annualCents)} annual potential</span><span>not counted yet</span></div></div></div>
-      <button class="btn go" onclick="claim(${i})">Mark completed and count it</button>
+      <button class="btn go" onclick="startOpportunity(${i})">Start action</button>
     </div>`).join('')}
   ${!reviews.length&&!actions.length?`<div class="card empty-decision"><iconify-icon icon="ph:check-circle-bold"></iconify-icon><b>No decisions waiting</b><span>Your agents found no evidence-backed savings action in the current data. Open Agents to see what each one checked.</span><button class="btn ghost" onclick="S.tab='agent';render()">Review agent investigations</button></div>`:''}
 
-  ${monitoring.length||sp?.uncategorisedShare>5?`<div class="sec"><span class="lbl">In progress</span><span class="act">agents still working</span></div>
+  ${workflows.length?`<div class="sec"><span class="lbl">Savings actions</span><span class="act">verification required</span></div>
+  ${workflows.map(a=>`<div class="card decision-card workflow-card"><div class="decision-status"><span class="badge ${a.status==='awaiting_verification'?'b-warn':'b-save'}">${a.status==='awaiting_verification'?'Awaiting proof':'Action started'}</span><span>${esc(agentName(a.agent))}</span></div><div class="row" style="align-items:flex-start"><div class="decision-icon"><iconify-icon icon="ph:hourglass-medium-bold"></iconify-icon></div><div class="grow"><div class="decision-title">${esc(a.title)}</div><div class="decision-detail">${esc(a.detail)}</div><div class="agent-evidence"><span>${$m0(a.annualCents??a.amountCents)} potential</span><span>not counted</span></div></div></div><div class="workflow-steps"><span class="done">1 · Started</span><span class="${a.status==='awaiting_verification'?'done':''}">2 · Awaiting proof</span><span>3 · Verified</span></div><div class="row workflow-actions">${a.status==='action_started'?`<button class="btn ghost" onclick="awaitSaving('${a.id}')">Action submitted</button>`:''}<button class="btn go" onclick="verifySaving('${a.id}','${proofKind(a.agent)}')">${proofLabel(a.agent)}</button><button class="btn ghost" onclick="rejectSaving('${a.id}')">No savings realized</button></div></div>`).join('')}`:''}
+
+  ${monitoring.length||alerts.length||sp?.uncategorisedShare>5?`<div class="sec"><span class="lbl">Monitoring</span><span class="act">observations, not savings</span></div>
   <div class="card progress-list">
+    ${alerts.map(a=>`<button class="progress-row" onclick="S.tab='agent';render()"><iconify-icon icon="ph:trend-up-bold"></iconify-icon><span><b>${esc(a.title)}</b><small>${esc(a.detail)}</small></span><em>Review →</em></button>`).join('')}
     ${monitoring.length?`<button class="progress-row" onclick="S.tab='ask';render()"><iconify-icon icon="ph:bell-ringing-bold"></iconify-icon><span><b>${monitoring.length} price agent${monitoring.length===1?'':'s'} monitoring</b><small>${monitoring.map(h=>h.name).slice(0,2).map(esc).join(' · ')}</small></span><em>Shop →</em></button>`:''}
     ${sp?.uncategorisedShare>5?`<button class="progress-row" onclick="teachNext()"><iconify-icon icon="ph:tag-bold"></iconify-icon><span><b>${sp.uncategorisedShare}% needs categorization</b><small>${(S.unknowns||[]).length} merchant${(S.unknowns||[]).length===1?'':'s'} need your input</small></span><em>Review →</em></button>`:''}
   </div>`:''}
@@ -557,7 +588,7 @@ function viewSave() {
     <div class="decision-icon done"><iconify-icon icon="ph:check-bold"></iconify-icon></div><div class="grow"><div style="font-size:13px;font-weight:650">${esc(e.evidence?.note??title(e.method))}</div>
       <div class="tiny muted" style="margin-top:2px">${new Date(e.createdAt).toLocaleDateString()} · ${title(e.method)}</div></div>
     <div style="font-weight:750;color:var(--save)">${$m0(e.amountCents+e.amountCents*e.recurringMonths)}</div></div>`).join('')}</div>`
-    :'<div class="card"><div class="tiny muted">Nothing counted yet. Verafi records savings only after you confirm the action.</div></div>'}`;
+    :'<div class="card"><div class="tiny muted">Nothing verified yet. Verafi counts savings only after a completed action has a confirmed financial outcome.</div></div>'}`;
 }
 
 function agentName(id='') {
@@ -574,7 +605,7 @@ function viewWallet() {
   const cardIdeas = cardRecommendations(cards);
   return `
   ${BRAND()}
-  <div class="top"><h1>Pay</h1><span class="sp"></span>
+  <div class="top"><h1>Cards</h1><span class="sp"></span>
     <button class="chipbtn" onclick="S.tab='settings';render()">⚙</button></div>
   <div class="tiny muted">Your accounts, read through Plaid. Verafi holds nothing.</div>
 
@@ -609,10 +640,10 @@ function viewWallet() {
       </div>
       <div class="row" style="margin-top:10px;padding-top:9px;border-top:1px solid var(--line);gap:6px;flex-wrap:wrap">
         <span class="badge b-save">read · live</span>
-        <span class="badge b-warn">pay · not available</span>
+        <span class="badge b-warn">automatic payments unavailable</span>
       </div>
       <div class="tiny" style="color:var(--dim);margin-top:7px;line-height:1.5">
-        Agent-initiated payments need Visa Intelligent Commerce or Mastercard Agent Pay — both require a registered business. Not available to a personal account.
+        Verafi can recommend the right card, but it cannot move money or pay a bill. Checkout and payments stay with your bank or merchant.
       </div>
     </div>`).join('') || '<div class="card"><div class="tiny muted">No accounts linked yet. ⚙ → Link an account.</div></div>'}
 
@@ -683,17 +714,18 @@ function viewAgent() {
             ${mine.length?`<span class="badge b-save">${mine.length} found</span>`:''}</div>
           <div class="agent-counts"><span>${audit?.candidates??0} candidates</span><span>${audit?.confirmed??0} confirmed</span><span>${audit?.needsReview??0} need review</span></div>
           <div class="tiny muted" style="margin-top:7px;line-height:1.55">${a.enabled
-            ? (mine.length ? esc(mine[0].detail ?? mine[0].title) : `No confirmed issue. Checked ${audit?.candidates??0} candidates across ${esc(audit?.scope??'its scope')}.`)
+            ? (mine.length ? esc(mine[0].detail ?? mine[0].title)
+              : esc(audit?.result??`No usable evidence was available for ${audit?.scope??'this investigation'}.`))
             : `Off — ${esc(audit?.scope??'no analysis is being run')}.`}</div>
           <div class="tiny" style="color:var(--dim);margin-top:6px">Next: ${esc(audit?.next??CAP[a.capability]??a.capability)}</div>
         </div>
-        <div class="tog ${a.enabled?'on':''}" onclick="toggleAgent('${a.id}',${!a.enabled})"><i></i></div>
+        <button class="tog ${a.enabled?'on':''}" role="switch" aria-checked="${a.enabled}" aria-label="${a.enabled?'Disable':'Enable'} ${escAttr(a.name)}" onclick="toggleAgent('${a.id}',${!a.enabled})"><i></i></button>
       </div>
       <button class="agent-expand" onclick="S.openAgent=S.openAgent==='${a.id}'?null:'${a.id}';render()">${expanded?'Hide investigation':'View investigation'} <span>${expanded?'⌃':'⌄'}</span></button>
       ${expanded?`<div class="agent-investigation">
         <div><span>What it checked</span><b>${esc(audit?.scope??'No defined scope')}</b></div>
         <div><span>Current result</span><b>${a.enabled?`${audit?.candidates??0} candidates · ${audit?.confirmed??0} confirmed · ${audit?.needsReview??0} need review`:'Agent is off'}</b></div>
-        <div><span>Evidence</span><b>${mine.length?esc(mine.map(x=>x.title).slice(0,3).join(' · ')):`No finding passed this agent's evidence threshold.`}</b></div>
+        <div><span>Evidence</span><b>${mine.length?esc(mine.map(x=>x.title).slice(0,3).join(' · ')):audit?.blocker?esc(audit.blocker):audit?.candidates?`${audit.candidates} candidates were checked; the evidence was not strong enough to interrupt you.`:`No qualifying evidence was available.`}</b></div>
         <div><span>Next action</span><b>${esc(audit?.next??CAP[a.capability]??a.capability)}</b></div>
         <div class="agent-method"><iconify-icon icon="ph:shield-check-bold"></iconify-icon><span>${st.llmProvider?.allowPersonal?'Local calculations find exact amounts; the reasoning model prioritizes and explains them.':'This agent ran locally. The free model did not inspect personal financial details.'}</span></div>
       </div>`:''}
@@ -709,7 +741,7 @@ function viewAgent() {
   ${(S.hunts??[]).map(h=>`<div class="card agent-card"><div class="row" style="align-items:flex-start"><div class="decision-icon"><iconify-icon icon="ph:bell-ringing-bold"></iconify-icon></div><div class="grow">
     <div class="row" style="gap:6px"><b style="font-size:13.5px">${esc(h.name)}</b><span class="badge ${h.recommendation?.status==='buy_now'?'b-save':'b-spend'}">${esc(h.recommendation?.label??'Monitoring')}</span></div>
     <div class="tiny muted" style="margin-top:5px;line-height:1.55">${esc(h.summary)}</div><div class="tiny" style="color:var(--dim);margin-top:6px">${esc(h.recommendation?.detail??'Waiting for its first price check.')}</div></div>
-    <div class="tog ${h.enabled?'on':''}" onclick="toggleHunt('${h.id}',${!h.enabled})"><i></i></div></div>
+    <button class="tog ${h.enabled?'on':''}" role="switch" aria-checked="${h.enabled}" aria-label="${h.enabled?'Disable':'Enable'} ${escAttr(h.name)}" onclick="toggleHunt('${h.id}',${!h.enabled})"><i></i></button></div>
     <button class="agent-expand" onclick="runHunt('${h.id}')">Check current price <span>→</span></button></div>`).join('')}`:''}
 
   <div class="sec"><span class="lbl">Activity log</span><span class="act">${(st.runs??[]).length} runs</span></div>
@@ -728,6 +760,7 @@ function viewSettings() {
   return `
   <div class="top"><button class="chipbtn" onclick="S.tab='ask';render()">← Back</button>
     <span class="sp"></span><h1 style="font-size:20px">Setup</h1></div>
+  ${S.actionNote?`<div class="action-toast" role="status">${esc(S.actionNote)}</div>`:''}
 
   <div class="sec"><span class="lbl">Linked accounts</span>
     <button class="act" onclick="refresh()">${S.busy?'syncing…':'sync now'}</button></div>
@@ -743,12 +776,16 @@ function viewSettings() {
     ${st.plaidConfigured
       ? `<div class="tiny muted" style="line-height:1.55">Plaid is configured in <b>${st.plaidEnv}</b> mode.${st.plaidEnv==='sandbox'?' Test with <code>user_good</code> / <code>pass_good</code>.':''}</div>
          <button class="btn go" onclick="linkPlaid()">Link ${st.connections?.length?'another':'an'} account</button>`
-      : `<div class="tiny muted" style="line-height:1.55">To link a bank, add your Plaid keys to <code>verafi/.env</code> and restart. Until then, import CSV files.</div>`}
+      : `<div class="tiny muted" style="line-height:1.55">Bank connection is not available in this environment. You can continue by importing a statement.</div>`}
     <button class="btn ghost" onclick="$('file2').click()">Import a CSV / OFX file</button>
     <input type="file" id="file2" multiple accept=".csv,.ofx,.qfx,.txt" style="display:none" onchange="importFiles(this.files)"/>
   </div>
 
   ${coveragePanel(st.coverage)}
+
+  ${(st.imports??[]).length?`<div class="sec"><span class="lbl">Import history</span><span class="act">latest files</span></div><div class="card">${st.imports.slice(0,6).map((x,i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}><div class="grow"><div style="font-size:12.5px;font-weight:650">${esc(x.filename)}</div><div class="tiny muted">${new Date(x.importedAt).toLocaleString()} · ${x.format}</div></div><span class="badge ${x.added?'b-save':'b-warn'}">${x.added} added · ${x.skipped} skipped</span></div>`).join('')}</div>`:''}
+
+  ${(st.notifications??[]).length?`<div class="sec"><span class="lbl">Notification history</span><span class="act">delivery status</span></div><div class="card">${st.notifications.slice(0,6).map((x,i)=>`<div class="li" ${i===0?'style="padding-top:0"':''}><div class="grow"><div style="font-size:12.5px;font-weight:650">${esc(x.title)}</div><div class="tiny muted">${new Date(x.createdAt).toLocaleString()}${x.error?` · ${esc(x.error)}`:''}</div></div><span class="badge ${x.status==='sent'?'b-save':x.status==='failed'?'b-warn':'b-spend'}">${title(x.status)}</span></div>`).join('')}</div>`:''}
 
   ${cards?.instruments?.length ? `
   <div class="sec"><span class="lbl">Which card is which</span></div>
@@ -775,7 +812,7 @@ function viewSettings() {
             ? 'Analyzes your connected transactions and reports only evidence-backed findings.'
             : 'Off — no analysis is being run.'}</div>
         </div>
-        <div class="tog ${a.enabled?'on':''}" onclick="toggleAgent('${a.id}',${!a.enabled})"><i></i></div>
+        <button class="tog ${a.enabled?'on':''}" role="switch" aria-checked="${a.enabled}" aria-label="${a.enabled?'Disable':'Enable'} ${escAttr(a.name)}" onclick="toggleAgent('${a.id}',${!a.enabled})"><i></i></button>
       </div>
     </div>`).join('')}
 
@@ -806,8 +843,8 @@ async function autoCategorise() {
   S.busy = true; render();
   try {
     const r = await api('/api/autocategorise', {});
-    if (r.ok) alert(`Categorised ${r.learned} merchants for $${(r.costUsd||0).toFixed(3)}.`);
-    else alert(r.error || r.reason);
+    if (r.ok) S.actionNote=`Categorised ${r.learned} merchants for $${(r.costUsd||0).toFixed(3)}.`;
+    else S.error=r.error||r.reason||'Automatic categorization could not finish.';
     await load();
   } catch (e) { S.error = e.message; }
   S.busy = false; render();
@@ -815,22 +852,37 @@ async function autoCategorise() {
 
 async function teachNext() {
   const u = (S.unknowns || [])[0];
-  if (!u) { alert('Nothing left to categorise.'); return; }
-  const t = S.taxonomy || [];
-  const pick = prompt(`${u.name}\n$${Math.round(u.cents/100).toLocaleString()} across ${u.count} transaction(s)\n\n` +
-    t.map((c,i)=>`${i+1}. ${c.label}`).join('\n') + '\n\nType a number:');
-  if (!pick) return;
-  const c = t[parseInt(pick,10)-1];
-  if (!c) return;
-  await api('/api/teach', { merchant: u.name.toLowerCase().slice(0,40), category: c.key });
-  await load();
-  if ((S.unknowns||[]).length) setTimeout(teachNext, 200);
+  if (!u) { S.actionNote='Everything is categorized.';render();return; }
+  openModal('teach',{merchant:u});
 }
 
 async function setCard(id, cardKey) { await api('/api/instruments/card', { id, cardKey }); await load(); }
 async function wipe() {
-  if (!confirm('Erase all imported data on this device?')) return;
-  await api('/api/reset', {}); location.reload();
+  openModal('wipe');
+}
+
+function modalView(){
+  const m=S.modal;if(!m)return '';
+  let titleText='Confirm action',body='',primary='Continue',field='';
+  if(m.kind==='deleteHunt'){titleText='Delete price watch?';body=`${esc(m.name||'This watch')} will stop checking prices.`;primary='Delete watch';}
+  if(m.kind==='deleteCategory'){titleText='Delete shopping agent?';body='Existing price watches will keep running until you remove them separately.';primary='Delete agent';}
+  if(m.kind==='dropDeal'){titleText='Remove saved product?';body=`${esc(m.name||'This product')} will leave your Shop list.`;primary='Remove';}
+  if(m.kind==='wipe'){titleText='Erase all Verafi data?';body='This permanently removes imported transactions, settings, findings, and savings history from this private environment.';primary='Erase everything';field='<label>Type ERASE to confirm<input id="modalValue" autocomplete="off" placeholder="ERASE"/></label>';}
+  if(m.kind==='holdDeal'){titleText='Save this research';body='Enter the current price so Verafi can track the item without guessing.';primary='Save product';field='<label>Current price<input id="modalValue" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="99.99"/></label>';}
+  if(m.kind==='teach'){titleText='Categorize this merchant';body=`${esc(m.merchant?.name)} · ${m.merchant?.count??0} transaction${m.merchant?.count===1?'':'s'} · ${$m0(m.merchant?.cents??0)}`;primary='Save category';field=`<label>Category<select id="modalValue"><option value="">Choose a category</option>${(S.taxonomy??[]).map(c=>`<option value="${escAttr(c.key)}">${esc(c.label)}</option>`).join('')}</select></label>`;}
+  return `<div class="sheet-backdrop" onclick="if(event.target===this)closeModal()"><section class="sheet confirm-sheet" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="sheet-title"><div><span>Verafi</span><h2 id="modalTitle">${titleText}</h2></div><button aria-label="Close dialog" onclick="closeModal()">×</button></div><p class="muted modal-copy">${body}</p>${field}<div class="row modal-actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button id="modalPrimary" class="btn go" onclick="confirmModal()">${primary}</button></div></section></div>`;
+}
+async function confirmModal(){
+  const m=S.modal;if(!m)return;
+  try{
+    if(m.kind==='deleteHunt')await api('/api/hunts/delete',{id:m.id});
+    if(m.kind==='deleteCategory')await api('/api/deals/categories/delete',{id:m.id});
+    if(m.kind==='dropDeal')await api('/api/deals/drop',{id:m.id});
+    if(m.kind==='holdDeal'){const price=Number($('modalValue')?.value);if(!Number.isFinite(price)||price<=0)throw new Error('Enter a valid current price.');await api('/api/deals/hold',{title:m.name,priceCents:Math.round(price*100),category:S.openDeal??'other',url:''});}
+    if(m.kind==='teach'){const category=$('modalValue')?.value;if(!category)throw new Error('Choose a category.');await api('/api/teach',{merchant:String(m.merchant.name).toLowerCase().slice(0,40),category});S.actionNote=`Categorized ${m.merchant.name}.`;}
+    if(m.kind==='wipe'){if($('modalValue')?.value!=='ERASE')throw new Error('Type ERASE exactly to continue.');await api('/api/reset',{});location.reload();return;}
+    S.modal=null;await load();
+  }catch(e){S.error=e.message;render();}
 }
 
 /* ---------------------------------------------------------------- actions */
@@ -854,11 +906,14 @@ async function linkPlaid() {
 async function importFiles(files) {
   S.busy = true; S.error = null; render();
   try {
+    let added=0,skipped=0;
     for (const f of files) {
       const text = await f.text();
       const r = await api('/api/import', { filename: f.name, text });
       if (r.error) throw new Error(r.error);
+      added+=r.added??0;skipped+=r.skipped??0;
     }
+    S.actionNote=`Import complete: ${added} transactions added${skipped?`, ${skipped} duplicates skipped`:''}.`;
     await load();
   } catch (e) { S.error = e.message; }
   S.busy = false; render();
@@ -870,6 +925,7 @@ async function refresh() {
   catch (e) { S.error = e.message; }
   S.busy = false; render();
 }
+async function setSpendDays(days){S.spendDays=days;S.busy=true;render();try{S.spend=await api(`/api/spend?days=${days}`);}catch(e){S.error=e.message;}S.busy=false;render();}
 
 async function toggleAgent(id, enabled) { await api('/api/agents/toggle', { id, enabled }); await load(); }
 
@@ -881,15 +937,8 @@ async function runAgentsNow() {
 }
 async function dismiss(key) { await api('/api/findings/dismiss', { key }); await load(); }
 
-async function claim(i) {
-  const o = S.save.opportunities[i];
-  await recordSaving(o);
-}
-
-async function claimReview(i) {
-  const o=(S.save.reviewQueue??[])[i];
-  await recordSaving(o);
-}
+async function startOpportunity(i) { return startSaving((S.save.opportunities??[])[i]); }
+async function startReview(i) { return startSaving((S.save.reviewQueue??[])[i]); }
 
 async function keepReview(i) {
   const o=(S.save.reviewQueue??[])[i];
@@ -898,17 +947,12 @@ async function keepReview(i) {
   await load();
 }
 
-async function recordSaving(o) {
-  if(!o)return;
-  const METHOD = { subscription_auditor:'subscription_cancel', fee_catcher:'fee_refund',
-    card_router:'card_routing', price_creep:'negotiation', overlap_watch:'subscription_cancel',
-    dormant_spend:'subscription_cancel', duplicate_watch:'duplicate_refund' };
-  const recurs = ['subscription_auditor','card_router','overlap_watch','dormant_spend','price_creep'].includes(o.agent);
-  await api('/api/save/claim', { amountCents: o.amountCents,
-    recurringMonths: recurs ? 11 : 0, method: METHOD[o.agent] ?? 'fee_refund',
-    evidence: { kind:'confirmed_by_me', note: o.title } });
-  await load();
-}
+async function startSaving(o) { if(!o)return;await api('/api/save/actions/start',{findingKey:`${o.agent}:${o.ref}`});await load(); }
+async function awaitSaving(id) { await api('/api/save/actions/await',{id});await load(); }
+function proofKind(agent){return ['subscription_auditor','overlap_watch','dormant_spend'].includes(agent)?'cancellation_confirmation':agent==='fee_catcher'?'fee_reversal':agent==='duplicate_watch'?'refund_received':agent==='card_router'?'card_charge_confirmed':'lower_price_confirmed';}
+function proofLabel(agent){return ['subscription_auditor','overlap_watch','dormant_spend'].includes(agent)?'Cancellation confirmed':agent==='fee_catcher'?'Fee reversed':agent==='duplicate_watch'?'Refund received':agent==='card_router'?'Card charge confirmed':'Lower price confirmed';}
+async function verifySaving(id,kind){await api('/api/save/actions/verify',{id,proofKind:kind,confirmed:true});await load();}
+async function rejectSaving(id){await api('/api/save/actions/reject',{id,reason:'No savings realized'});await load();}
 
 function toggleTheme() {
   document.body.classList.toggle('dark');
@@ -930,16 +974,18 @@ function render() {
   $('app').innerHTML = S.locked ? viewLock()
     : !st ? '<div class="empty"><span class="spin"></span></div>'
     : !st.linked ? viewOnboard()
+    : S.tab === 'home' ? viewHome()
     : S.tab === 'spend' ? viewSpend()
     : S.tab === 'settings' ? viewSettings()
     : S.tab === 'wallet' ? viewWallet()
     : S.tab === 'agent' ? viewAgent()
     : S.tab === 'save' ? viewSave() : viewShop();
+  $('app').insertAdjacentHTML('beforeend',modalView());
 
   if (S.locked) { $('tabs').innerHTML = ''; setTimeout(()=>$('pc')?.focus(), 60); return; }
   $('tabs').innerHTML = !st?.linked ? '' :
-    [['ask','Shop'],['spend','Spend'],['save','Save'],['wallet','Pay'],['agent','Agents']].map(([k,l])=>
-      `<button class="${S.tab===k?'on':''}" onclick="S.tab='${k}';render();scrollTo(0,0)">
+    [['home','Home'],['ask','Shop'],['spend','Spend'],['save','Save'],['wallet','Cards'],['agent','Agents']].map(([k,l])=>
+      `<button class="${S.tab===k?'on':''}" aria-current="${S.tab===k?'page':'false'}" onclick="go('${k}')">
          <svg viewBox="0 0 24 24">${ICONS[k]}</svg>${l}</button>`).join('');
 
   const d = $('drop');

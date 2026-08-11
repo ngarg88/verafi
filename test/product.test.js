@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isDealQuery, purchaseContext, makeDealCategory, dealPresets } from '../verafi/deals.js';
+import { isDealQuery, purchaseContext, makeDealCategory, dealPresets, fallbackDealDecision } from '../verafi/deals.js';
 import { AGENTS, reviewAgents } from '../verafi/agents.js';
 import { Plaid } from '../verafi/plaid.js';
 import { makeRule, recommendWatch } from '../verafi/rules.js';
@@ -36,6 +36,48 @@ test('Subscription Auditor creates honest review candidates, not claimed savings
   const audit=reviewAgents({data,now:NOW,cardRules:{}}).agents.find(a=>a.id==='subscription_auditor');
   assert.equal(audit.needsReview,1);
   assert.ok(audit.candidates>=1);
+});
+
+test('Subscription Auditor investigates a clear two-charge pattern in short history',()=>{
+  const rows=[60,30].map(d=>tx('Netflix',25,d,{category:'subscription'}));
+  const found=AGENTS.subscription_auditor.run({tx:rows,now:NOW});
+  assert.equal(found.length,1);
+  assert.equal(found[0].reviewOnly,true);
+  assert.match(found[0].detail,/available history/);
+});
+
+test('wire fees are not overdrafts and overlapping imports are consolidated',()=>{
+  const rows=[
+    {...tx('Outgoing Wire Transfer Fee',25,4,{category:'fee'}),externalId:'plaid-1',instrumentId:'checking1',isFee:true},
+    {...tx('Outgoing Wire Transfer Fee',25,4,{category:'fee'}),externalId:'csv-1',instrumentId:'checking1',isFee:true}
+  ];
+  const found=AGENTS.fee_catcher.run({tx:rows,now:NOW});
+  assert.equal(found.length,1);
+  assert.match(found[0].title,/wire transfer fee/i);
+  assert.doesNotMatch(found[0].title,/overdraft/i);
+  assert.equal(found[0].annualCents,2500);
+  assert.equal(found[0].evidence.matchingRows,2);
+  assert.equal(AGENTS.duplicate_watch.run({tx:rows,now:NOW,since:NOW-45*DAY}).length,0);
+});
+
+test('discretionary drift works when Plaid has no purchase times',()=>{
+  const rows=[];
+  for(let i=0;i<10;i++)rows.push({...tx('Restaurant recent '+i,100,2+i*3,{category:'dining'}),localHour:undefined});
+  for(let i=0;i<10;i++)rows.push({...tx('Restaurant prior '+i,40,48+i*3,{category:'dining'}),localHour:undefined});
+  const found=AGENTS.weekend_drift.run({tx:rows,now:NOW});
+  assert.equal(found.length,1);
+  assert.match(found[0].title,/increased/i);
+  assert.equal(found[0].alertOnly,true);
+});
+
+test('Shop timeout fallback uses literal prices from live evidence only',()=>{
+  const decision=fallbackDealDecision([
+    {title:'Kids Coat — Example Store',url:'https://store.example/coat',content:'Today $79.99 with free returns'},
+    {title:'No price article',url:'https://review.example/coat',content:'A good coat'}
+  ]);
+  assert.equal(decision.products.length,1);
+  assert.equal(decision.products[0].price,79.99);
+  assert.equal(decision.products[0].url,'https://store.example/coat');
 });
 
 test('Card Router counts only attributable, proven multiplier gaps',()=>{

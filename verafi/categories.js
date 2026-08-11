@@ -23,7 +23,7 @@ export const TAXONOMY = {
   kids:          { icon:'🧸', label:'Kids',          subs:['childcare','school','toys','activities'] },
   services:      { icon:'🔧', label:'Services',      subs:['cleaning','repairs','shipping','professional','storage'] },
   charity:       { icon:'❤️', label:'Giving',        subs:['donations','religious'] },
-  fee:           { icon:'⚠️', label:'Fees',          subs:['bank','atm','foreign','late','interest'] },
+  fee:           { icon:'⚠️', label:'Fees',          subs:['bank','wire','atm','foreign','late','interest'] },
   other:         { icon:'❓', label:'Uncategorised', subs:['unknown'] }
 };
 
@@ -35,6 +35,7 @@ const RULES = [
   [/foreign transaction|intl? (txn|transaction) fee|fx fee/i,   'fee','foreign'],
   [/late (fee|payment charge)/i,                                'fee','late'],
   [/interest charge|finance charge|purchase interest/i,         'fee','interest'],
+  [/wire (transfer )?fee|fee.*wire transfer/i,                   'fee','wire'],
   [/\b(monthly|annual|membership|maintenance|service) fee\b/i,  'fee','bank'],
 
   // subscriptions

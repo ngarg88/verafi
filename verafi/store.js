@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /**
@@ -8,21 +8,31 @@ import { dirname, join } from 'node:path';
 const EMPTY = {
   profile: { email: null, cashFloorCents: 200000, linkedAt: null },
   connections: [], instruments: [], transactions: [], agents: [],
-  mandates: [], rules: [], runs: [], savings: [], cursors: {},
-  customCategories: [], hunts: [], watchlist: []
+  mandates: [], rules: [], runs: [], savings: [], savingsActions: [], cursors: {},
+  customCategories: [], hunts: [], watchlist: [], imports: [], notificationHistory: []
 };
 
 export class Store {
   constructor(path) {
     this.path = path;
     mkdirSync(dirname(path), { recursive: true });
-    this.data = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : structuredClone(EMPTY);
+    if (existsSync(path)) {
+      try { this.data=JSON.parse(readFileSync(path,'utf8')); }
+      catch(e) {
+        const backup=path+'.bak';
+        if(!existsSync(backup))throw new Error(`Verafi data is unreadable and no backup is available: ${e.message}`);
+        this.data=JSON.parse(readFileSync(backup,'utf8'));
+      }
+      try{chmodSync(path,0o600);}catch{}
+    } else this.data=structuredClone(EMPTY);
     for (const k of Object.keys(EMPTY)) if (this.data[k] === undefined) this.data[k] = structuredClone(EMPTY[k]);
   }
   save() {
     const tmp = this.path + '.tmp';
-    writeFileSync(tmp, JSON.stringify(this.data, null, 2));
+    if(existsSync(this.path))copyFileSync(this.path,this.path+'.bak');
+    writeFileSync(tmp, JSON.stringify(this.data, null, 2), {mode:0o600});
     renameSync(tmp, this.path);          // atomic on the same filesystem
+    try{chmodSync(this.path,0o600);chmodSync(this.path+'.bak',0o600);}catch{}
     return this;
   }
   /** Mutate in place — callers hold a reference to `data` and must not be orphaned. */

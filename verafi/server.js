@@ -20,8 +20,8 @@ import { expensesOnly, breakdown, classify, FLOW } from './classify.js';
 import { categoriseAll, categorise, TAXONOMY, unknownMerchants } from './categories.js';
 import { VERSION, BUILT, FEATURES } from './version.js';
 import { RESEARCH, ask as askResearch } from './research.js';
-import { isDealQuery, researchDeal, spendingContext, COST, dealPresets, holdDeal, approvalSummary } from './deals.js';
-import { makeRule, describe as describeRule, runRule, dueRules, SOURCE } from './rules.js';
+import { isDealQuery, researchDeal, spendingContext, COST, dealPresets, holdDeal, approvalSummary, makeDealCategory } from './deals.js';
+import { makeRule, describe as describeRule, runRule, dueRules, SOURCE, recommendWatch } from './rules.js';
 import { hasLLM, providerInfo, categoriseMerchants, interpretFindings, monthlyNarrative } from './llm.js';
 
 /** Per-month meter shared by every model call, so one cap covers the whole app. */
@@ -89,7 +89,7 @@ function applyPlaidUpdates({ added=[], modified=[], removed=[] }, byAccount) {
   return { added:added.filter(t=>!existing.has(t.transaction_id)).length,
     modified:modified.length, removed:removed.length };
 }
-import { notify } from './notify.js';
+import { notify as sendNotification } from './notify.js';
 import { authRequired, checkPasscode, issueCookie, verifyCookie, cookieFrom, setCookieHeader } from './auth.js';
 import {
   deriveSignals, proposeAgents, gateFor,
@@ -98,6 +98,23 @@ import {
   priceStats, rankOffers, shouldWait,
   CAPABILITY, SURFACE, makeAgent
 } from '../packages/core/index.js';
+
+const SAVING_ACTION_STATUS = Object.freeze({
+  STARTED:'action_started', AWAITING:'awaiting_verification', VERIFIED:'verified', REJECTED:'rejected'
+});
+const SAVING_METHOD_BY_AGENT = Object.freeze({
+  subscription_auditor:METHOD.SUBSCRIPTION_CANCEL, fee_catcher:METHOD.FEE_REFUND,
+  card_router:METHOD.CARD_ROUTING, price_creep:METHOD.NEGOTIATION,
+  overlap_watch:METHOD.SUBSCRIPTION_CANCEL, dormant_spend:METHOD.SUBSCRIPTION_CANCEL,
+  duplicate_watch:METHOD.DUPLICATE_REFUND
+});
+const RECURRING_AGENTS = new Set(['subscription_auditor','card_router','overlap_watch','dormant_spend','price_creep']);
+const PROOF_KINDS = new Set(['cancellation_confirmation','refund_received','fee_reversal','statement_credit','lower_price_confirmed','card_charge_confirmed']);
+
+function findingKey(f) { return `${f.agent}:${f.ref}`; }
+function savingAction(id) { return (D.savingsActions??[]).find(a=>a.id===id); }
+function savingActionByFinding(f) { return (D.savingsActions??[]).find(a=>a.findingKey===findingKey(f)&&a.status!=='rejected'); }
+function publicSavingActions() { return (D.savingsActions??[]).slice().sort((a,b)=>b.updatedAt-a.updatedAt); }
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -121,17 +138,23 @@ const json = (res, code, body) => { res.writeHead(code, { 'content-type':'applic
 const readBody = (req) => new Promise(r => { let b=''; req.on('data',c=>b+=c); req.on('end',()=>r(b?JSON.parse(b):{})); });
 const D = store.data;
 
+async function notify(message) {
+  const entry={id:'ntf_'+Date.now().toString(36),title:String(message.title??'Verafi update'),
+    lines:(message.lines??[]).map(String).slice(0,8),createdAt:Date.now(),status:'pending',channel:null,error:null};
+  D.notificationHistory.unshift(entry);D.notificationHistory=D.notificationHistory.slice(0,100);store.save();
+  try { entry.channel=await sendNotification(message);entry.status=entry.channel?'sent':'in_app_only'; }
+  catch(e){entry.status='failed';entry.error=String(e.message??e).slice(0,240);throw e;}
+  finally {entry.updatedAt=Date.now();store.save();}
+  return entry.channel;
+}
+
 seedAgentCatalog(D);   // keep the catalog current across upgrades
 
 /**
- * Personal-mode default: every agent on.
- *
- * The consumer product deliberately ships agents DISABLED — an agent you switched on
- * yourself is one you'll trust with money later. That reasoning doesn't apply when you
- * are the only user and you asked for zero manual steps. Set AUTO_ENABLE_AGENTS=0 to
- * get the product behaviour back.
+ * Agents are opt-in by default. Private test environments may explicitly set
+ * AUTO_ENABLE_AGENTS=1, but a consumer should understand what each agent checks first.
  */
-if (process.env.AUTO_ENABLE_AGENTS !== '0') for (const a of D.agents) a.enabled = true;
+if (process.env.AUTO_ENABLE_AGENTS === '1') for (const a of D.agents) a.enabled = true;
 store.save();
 
 /** Anything dropped in verafi/statements/ is imported automatically. No clicking. */
@@ -204,7 +227,8 @@ const ROUTES = {
       instruments: D.instruments, agents: D.agents, signals,
       coverage:dataCoverage(), agentReview:reviewAgents({ data:D, cardRules:CARD_RULES }),
       savings: { verifiedTotalCents: verifiedTotalCents(D.savings), events: D.savings.slice(0, 30) },
-      mandate: ensureRootMandate(), runs: D.runs.slice(0, 12).map(r => ({ ...r, steps: r.steps.length }))
+      mandate: ensureRootMandate(), runs: D.runs.slice(0, 12).map(r => ({ ...r, steps: r.steps.length })),
+      imports:(D.imports??[]).slice(0,12),notifications:(D.notificationHistory??[]).slice(0,20)
     };
   },
 
@@ -323,8 +347,10 @@ const ROUTES = {
     return {
       verifiedTotalCents: verifiedTotalCents(D.savings),
       events: D.savings,
-      opportunities: all.filter(f=>!f.reviewOnly),
-      reviewQueue: all.filter(f=>f.reviewOnly),
+      actions: publicSavingActions(),
+      opportunities: all.filter(f=>!f.reviewOnly&&!f.alertOnly&&!savingActionByFinding(f)),
+      reviewQueue: all.filter(f=>f.reviewOnly&&!savingActionByFinding(f)),
+      alerts: all.filter(f=>f.alertOnly),
       recurringAnnualCents, oneOffCents,
       totalAnnualOpportunityCents: recurringAnnualCents,
       agentsEnabled: D.agents.filter(a => a.enabled).length,
@@ -332,13 +358,51 @@ const ROUTES = {
     };
   },
 
+  'POST /api/save/actions/start': async (b) => {
+    const finding=(D.findings??[]).find(f=>findingKey(f)===b.findingKey);
+    if(!finding||finding.alertOnly) return {status:404,error:'This savings finding is no longer available.'};
+    const existing=(D.savingsActions??[]).find(a=>a.findingKey===b.findingKey&&!['rejected','verified'].includes(a.status));
+    if(existing)return {action:existing};
+    const now=Date.now();
+    const action={id:'sva_'+now.toString(36),findingKey:b.findingKey,agent:finding.agent,ref:finding.ref,
+      title:finding.title,detail:finding.detail,amountCents:finding.amountCents,
+      annualCents:finding.annualCents,method:SAVING_METHOD_BY_AGENT[finding.agent]??METHOD.NEGOTIATION,
+      recurringMonths:RECURRING_AGENTS.has(finding.agent)?11:0,status:SAVING_ACTION_STATUS.STARTED,
+      evidence:finding.evidence??{},startedAt:now,updatedAt:now,verifiedAt:null,rejectedAt:null};
+    D.savingsActions.unshift(action);store.save();return {action};
+  },
+
+  'POST /api/save/actions/await': async (b) => {
+    const action=savingAction(b.id);if(!action)return {status:404,error:'Savings action not found.'};
+    if(action.status!==SAVING_ACTION_STATUS.STARTED)return {status:409,error:'Only a started action can await verification.'};
+    action.status=SAVING_ACTION_STATUS.AWAITING;action.updatedAt=Date.now();store.save();return {action};
+  },
+
+  'POST /api/save/actions/verify': async (b) => {
+    const action=savingAction(b.id);if(!action)return {status:404,error:'Savings action not found.'};
+    if(![SAVING_ACTION_STATUS.STARTED,SAVING_ACTION_STATUS.AWAITING].includes(action.status))
+      return {status:409,error:'This action cannot be verified from its current state.'};
+    if(b.confirmed!==true||!PROOF_KINDS.has(b.proofKind))
+      return {status:422,error:'Choose the proof that confirms the financial outcome.'};
+    const amountCents=Number.isInteger(b.amountCents)&&b.amountCents>0?b.amountCents:action.amountCents;
+    const note=String(b.note??'').trim();
+    const ev=verifySavings(makeSavingsEvent({id:'sv_'+Date.now().toString(36),userId:'me',agentId:action.agent,
+      method:action.method,amountCents,recurringMonths:action.recurringMonths,
+      evidence:{kind:b.proofKind,note:note||action.title,findingKey:action.findingKey,sourceEvidence:action.evidence}}));
+    action.status=SAVING_ACTION_STATUS.VERIFIED;action.verifiedAt=Date.now();action.updatedAt=action.verifiedAt;
+    action.proof={kind:b.proofKind,note:note||action.title};D.savings.unshift(ev);store.save();
+    return {action,event:ev,verifiedTotalCents:verifiedTotalCents(D.savings)};
+  },
+
+  'POST /api/save/actions/reject': async (b) => {
+    const action=savingAction(b.id);if(!action)return {status:404,error:'Savings action not found.'};
+    if(action.status===SAVING_ACTION_STATUS.VERIFIED)return {status:409,error:'Verified savings cannot be rejected.'};
+    action.status=SAVING_ACTION_STATUS.REJECTED;action.rejectedAt=Date.now();action.updatedAt=action.rejectedAt;
+    action.rejectionReason=String(b.reason??'No savings realized').slice(0,200);store.save();return {action};
+  },
+
   'POST /api/save/claim': async (b) => {
-    const ev = verifySavings(makeSavingsEvent({ id:'sv_'+Date.now().toString(36), userId:'me',
-      method: b.method ?? METHOD.SUBSCRIPTION_CANCEL, amountCents: b.amountCents,
-      recurringMonths: b.recurringMonths ?? 0,
-      evidence: b.evidence ?? { kind:'manual', note:'confirmed by me' } }));
-    D.savings.unshift(ev); store.save();
-    return { event: ev, verifiedTotalCents: verifiedTotalCents(D.savings) };
+    return {status:410,error:'Direct savings claims are disabled. Start an action and verify the outcome.'};
   },
 
   'POST /api/agents/toggle': async (b) => {
@@ -388,8 +452,12 @@ const ROUTES = {
     }
     seedAgentCatalog(D);
     if (!D.profile.linkedAt) D.profile.linkedAt = Date.now();
+    const importRecord={id:'imp_'+Date.now().toString(36),filename:String(b.filename??'statement').slice(0,120),
+      format:isOfx?'OFX':'CSV',parsed:parsed.length,added:fresh.length,skipped:parsed.length-fresh.length,
+      importedAt:Date.now(),status:'completed'};
+    D.imports.unshift(importRecord);D.imports=D.imports.slice(0,50);
     store.finishRun(run);
-    return { added: fresh.length, skipped: parsed.length - fresh.length, total: store.tx().length, signals };
+    return { added: fresh.length, skipped: parsed.length - fresh.length, total: store.tx().length, signals, import:importRecord };
   },
 
   'POST /api/auth': async (b, _q, res) => {
@@ -427,25 +495,41 @@ const ROUTES = {
   }),
 
   'POST /api/findings/dismiss': async (b) => {
+    const dismissed=(D.findings??[]).find(f=>`${f.agent}:${f.ref}`===b.key);
     D.findings = (D.findings ?? []).filter(f => `${f.agent}:${f.ref}` !== b.key);
-    // Remember the dismissal, or the same finding returns on the next agent run.
-    D.dismissed ??= {}; D.dismissed[b.key] = Date.now();
+    // Suppress only the exact evidence reviewed. New amounts or transactions reopen it.
+    D.dismissed ??= {}; D.dismissed[b.key] = {at:Date.now(),signature:dismissed?JSON.stringify([dismissed.amountCents,dismissed.annualCents,dismissed.title,dismissed.evidence??{}]):null};
     store.save(); return { ok:true };
   },
 
   /** Research agents. capability = recommend. Nothing here can spend money. */
   /** Deal surface tuned to this user's own categories and budgets. */
-  'GET /api/deals/presets': async () => ({ categories: dealPresets(store.tx()) }),
+  'GET /api/deals/presets': async () => ({ categories: dealPresets(store.tx(), Date.now(), D.customCategories) }),
+  'POST /api/deals/categories': async (b) => {
+    try {
+      const category = makeDealCategory(b);
+      D.customCategories.unshift(category); store.save();
+      return { category };
+    } catch (e) { return { status:422, error:e.message }; }
+  },
+  'POST /api/deals/categories/delete': async (b) => {
+    const before = D.customCategories.length;
+    D.customCategories = D.customCategories.filter(c => c.id !== b.id);
+    if (D.customCategories.length === before) return { status:404, error:'category not found' };
+    store.save(); return { ok:true };
+  },
 
   /** Programmatic hunts: typed parameters, hard ceiling, never buys. */
   'GET /api/hunts': async () => ({
-    hunts: (D.hunts ?? []).map(h => ({ ...h, summary: describeRule(h) })),
+    hunts: (D.hunts ?? []).map(h => ({ ...h, summary: describeRule(h), recommendation:recommendWatch(h) })),
+    notificationChannel: process.env.NTFY_TOPIC ? 'push' : process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID
+      ? 'telegram' : process.env.RESEND_API_KEY && process.env.NOTIFY_EMAIL ? 'email' : null,
     sources: [{ key: SOURCE.OWN_HISTORY, label: 'Watch my own purchases', cost: 'free' },
               { key: SOURCE.WEB, label: 'Search the web', cost: 'needs an LLM provider configured' }]
   }),
   'POST /api/hunts': async (b) => {
     try {
-      const r = makeRule({ ...b, ceilingCents: Math.round(Number(b.ceilingCents)) });
+      const r = makeRule(b);
       (D.hunts ??= []).unshift(r); store.save();
       return { hunt: { ...r, summary: describeRule(r) } };
     } catch (e) { return { status: 422, error: e.message }; }
@@ -490,13 +574,17 @@ const ROUTES = {
     const run = store.startRun(b.query || b.preset || 'research');
     // "find me a deal" needs the outside world; "what am I overpaying for" needs your data.
     // Route on intent rather than making the user pick.
-    if (!b.preset && isDealQuery(b.query)) {
+    const selectedCategory = (D.customCategories ?? []).find(c => c.key === b.categoryKey);
+    const userQuery = selectedCategory
+      ? `${b.query}. Household context: ${selectedCategory.context}. Budget: $${Math.round(selectedCategory.budgetCents/100)}.`
+      : b.query;
+    if (!b.preset && isDealQuery(userQuery)) {
       const month = new Date().toISOString().slice(0,7);
       D.meter ??= {}; D.meter[month] ??= { monthUsd: 0, queries: 0, cache: {} };
-      const out = await researchDeal({ query: b.query, tx: store.tx(),
+      const out = await researchDeal({ query: userQuery, tx: store.tx(),
                                        meter: D.meter[month] });
       store.save();
-      store.step(run, 'research.deal', { query: b.query }, { ok: out.ok, sources: (out.sources||[]).length });
+      store.step(run, 'research.deal', { query: b.query, categoryKey:b.categoryKey ?? null }, { ok: out.ok, sources: (out.sources||[]).length });
       store.finishRun(run, out.ok ? 'completed' : 'blocked');
       return { agent:'deal', label:'Deal research', icon:'🔎', kind:'deal',
                steps:[{tool:'context.load',detail:out.context.summary},
@@ -659,7 +747,10 @@ const server = http.createServer(async (req, res) => {
  * Daily agent run. Deliberately a plain interval, not cron — this process is meant to
  * stay up, and one dependency-free timer is easier to reason about than a scheduler.
  */
-const EVERY = +(process.env.AGENT_INTERVAL_HOURS ?? 24) * 3600_000;
+const requestedIntervalHours = Number(process.env.AGENT_INTERVAL_HOURS ?? 24);
+const EVERY = Math.min(Math.max(Number.isFinite(requestedIntervalHours) ? requestedIntervalHours : 24, 1), 24*24) * 3600_000;
+if (requestedIntervalHours < 1 || requestedIntervalHours > 24*24 || !Number.isFinite(requestedIntervalHours))
+  console.warn(`  invalid AGENT_INTERVAL_HOURS=${process.env.AGENT_INTERVAL_HOURS}; using ${(EVERY/3600000).toFixed(0)}h`);
 let scheduledRunning = false;
 async function scheduled() {
   // A slow sync must not stack up behind itself.
@@ -683,7 +774,7 @@ async function scheduled() {
         const out = await runRule({ rule: h, store });
         if (out.matches?.length) await notify({
           title: `Verafi found a match: ${h.name}`,
-          lines: out.matches.map(m => `${m.title} — $${Math.round(m.foundPriceCents/100)}`),
+          lines: out.matches.map(m => `${m.recommendation?.label ?? 'Price trigger reached'} — ${m.title} at $${(m.foundPriceCents/100).toFixed(2)}. ${m.recommendation?.detail ?? ''}`),
           url: process.env.PUBLIC_URL }).catch(()=>{});
       } catch (e) { console.error('hunt failed:', h.name, e.message); }
     }
@@ -710,7 +801,7 @@ setInterval(async () => {
         const out = await runRule({ rule: h, store });
         if (out.matches?.length) await notify({
           title: `Verafi found a match: ${h.name}`,
-          lines: out.matches.map(m => `${m.title} — $${Math.round(m.foundPriceCents/100)}`),
+          lines: out.matches.map(m => `${m.recommendation?.label ?? 'Price trigger reached'} — ${m.title} at $${(m.foundPriceCents/100).toFixed(2)}. ${m.recommendation?.detail ?? ''}`),
           url: process.env.PUBLIC_URL }).catch(()=>{});
       } catch (e) { console.error('hunt failed:', h.name, e.message); }
     }

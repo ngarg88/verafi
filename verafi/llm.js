@@ -155,13 +155,15 @@ export function hasLLM() { return !!activeProvider(); }
 
 function quotaDay() { return new Date().toISOString().slice(0, 10); }
 
-async function tavilySearch({ query, meter, signal }) {
+async function tavilySearch({ query, meter }) {
   const monthlyLimit = Number(process.env.TAVILY_MONTHLY_LIMIT ?? 1000);
   const used = meter?.tavilySearches ?? 0;
   if (used >= monthlyLimit) return { ok:false, reason:'search_quota_reached', used, limit:monthlyLimit };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Number(process.env.SEARCH_TIMEOUT_MS ?? 8000));
   try {
     const r = await fetch('https://api.tavily.com/search', {
-      method:'POST', signal, headers:{ 'content-type':'application/json' },
+      method:'POST', signal:ctrl.signal, headers:{ 'content-type':'application/json' },
       body:JSON.stringify({ api_key:process.env.TAVILY_API_KEY, query,
         search_depth:'basic', max_results:5, include_answer:false, include_raw_content:false,
         include_images:true, include_image_descriptions:true })
@@ -178,7 +180,7 @@ async function tavilySearch({ query, meter, signal }) {
     return { ok:true, sources, images };
   } catch (e) {
     return { ok:false, reason:e.name === 'AbortError' ? 'timeout' : 'search_network', detail:e.message };
-  }
+  } finally { clearTimeout(timer); }
 }
 
 /** Low-level call with usage accounting. Never throws — returns {ok:false} instead. */
@@ -209,15 +211,12 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
   const cap = Number(process.env.RESEARCH_MONTHLY_CAP_USD ?? 5);
   if (meter && meter.monthUsd >= cap) return { ok: false, reason: 'monthly_cap_reached', spent: meter.monthUsd };
 
-  // A model call must NEVER be able to wedge the app. Hard timeout, always.
-  const ctrl = new AbortController();
-  const timeoutMs = Number(process.env.LLM_TIMEOUT_MS ?? 20000);
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-
   let externalSources = [], externalImages = [];
   if (search && process.env.TAVILY_API_KEY) {
-    const found = await tavilySearch({ query:user, meter, signal:ctrl.signal });
-    if (!found.ok) { clearTimeout(timer); return found; }
+    // Search and reasoning get separate budgets. Previously Tavily consumed part of
+    // the model's 20-second timer and healthy requests were aborted prematurely.
+    const found = await tavilySearch({ query:user, meter });
+    if (!found.ok) return found;
     externalSources = found.sources;
     externalImages = found.images ?? [];
     const evidence = externalSources.map((s,i)=>
@@ -225,6 +224,12 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
     const imageEvidence = externalImages.map((im,i)=>`[IMAGE ${i+1}] ${im.description||'Product image'}\nURL: ${im.url}`).join('\n\n');
     system += `\n\nUse only the current web evidence below for product facts, prices, availability and links. Cite sources inline as [1], [2], etc. If evidence is insufficient, say so.\n\n${evidence}${imageEvidence?`\n\nAvailable product images:\n${imageEvidence}`:''}`;
   }
+
+  // Start the reasoning timeout only after live evidence is ready. A queued free model
+  // cannot wedge the app, and deal research can still use the grounded sources below.
+  const ctrl = new AbortController();
+  const timeoutMs = Number(process.env.LLM_TIMEOUT_MS ?? 12000);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
 
   // One adapter for every OpenAI-compatible provider: groq, cerebras, openrouter, ollama.
   const cfg = PROVIDERS[info.provider];
@@ -251,7 +256,8 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
       if (meter) { meter.monthUsd=+((meter.monthUsd??0)+cost).toFixed(4); meter.calls=(meter.calls??0)+1; }
       return { ok:true, text, costUsd:+cost.toFixed(5), provider:'openai', sources };
     } catch (e) {
-      return { ok:false, reason:e.name==='AbortError'?'timeout':'network', detail:e.message };
+      return { ok:false, reason:e.name==='AbortError'?'timeout':'network', detail:e.message,
+        provider:info.provider, sources:externalSources, images:externalImages };
     } finally { clearTimeout(timer); }
   }
 
@@ -276,7 +282,8 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
       }
       return { ok:true, text, costUsd:0, provider: info.provider, sources: externalSources, images:externalImages };
     } catch (e) {
-      return { ok:false, reason: e.name==='AbortError' ? 'timeout' : 'network', detail:e.message };
+      return { ok:false, reason: e.name==='AbortError' ? 'timeout' : 'network', detail:e.message,
+        provider:info.provider, sources:externalSources, images:externalImages };
     } finally { clearTimeout(timer); }
   }
 
@@ -301,7 +308,8 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
       if (meter) meter.calls = (meter.calls ?? 0) + 1;        // free tier: no cost to add
       return { ok:true, text, costUsd:0, provider:'gemini', sources };
     } catch (e) {
-      return { ok:false, reason: e.name==='AbortError' ? 'timeout' : 'network', detail:e.message };
+      return { ok:false, reason: e.name==='AbortError' ? 'timeout' : 'network', detail:e.message,
+        provider:info.provider, sources:externalSources, images:externalImages };
     } finally { clearTimeout(timer); }
   }
 
@@ -325,7 +333,8 @@ export async function complete({ system, user, maxTokens = 1200, json = false, m
     if (meter) { meter.monthUsd = +((meter.monthUsd ?? 0) + cost).toFixed(4); meter.calls = (meter.calls ?? 0) + 1; }
     return { ok:true, text, costUsd:+cost.toFixed(5), provider:'anthropic' };
   } catch (e) {
-    return { ok:false, reason: e.name === 'AbortError' ? 'timeout' : 'network', detail:e.message };
+    return { ok:false, reason: e.name === 'AbortError' ? 'timeout' : 'network', detail:e.message,
+      provider:info.provider, sources:externalSources, images:externalImages };
   } finally { clearTimeout(timer); }
 }
 

@@ -112,6 +112,33 @@ export function parseDealDecision(text, sources, images = []) {
   } catch { return null; }
 }
 
+/** Return grounded merchant cards when live search succeeded but a queued free model
+ * did not finish. Prices are accepted only when literally present in source evidence. */
+export function fallbackDealDecision(sources = [], images = []) {
+  const products = sources.slice(0, 5).map((s, i) => {
+    const content = String(s.content ?? '');
+    const match = content.match(/(?:\$|USD\s?)([0-9]{1,5}(?:,[0-9]{3})*(?:\.[0-9]{2})?)/i);
+    const price = match ? Number(match[1].replace(/,/g,'')) : null;
+    let seller = 'Merchant';
+    try { seller = new URL(s.url).hostname.replace(/^www\./,'').split('.')[0].replace(/^./,c=>c.toUpperCase()); } catch {}
+    const words = String(s.title ?? '').toLowerCase().split(/\W+/).filter(w=>w.length>4);
+    const image = images.find(x => words.some(w => String(x.description ?? '').toLowerCase().includes(w)));
+    return {
+      name:String(s.title ?? seller).replace(/\s*[|–—]\s*.+$/,'').trim().slice(0,120),
+      label:i===0?'Live result':`Option ${i+1}`, price, seller, url:s.url,
+      image:image?.url ?? '', highlights:['Price found in live source'],
+      shipping:'Verify availability at merchant',
+      tradeoff:'The ranking model was busy, so this is grounded live evidence rather than a completed ranking.',
+      why:'Live merchant evidence was available even though model ranking did not finish.'
+    };
+  }).filter(p=>p.name&&p.url&&Number.isFinite(p.price)&&p.price>0).slice(0,3);
+  if (!products.length) return null;
+  return {
+    summary:'Live prices were found. The ranking model was busy, so these are shown as grounded options rather than a fully ranked recommendation.',
+    verification:'Confirm price, availability, shipping and returns on the merchant page.', products
+  };
+}
+
 /**
  * DEAL CATEGORIES, DERIVED FROM WHAT YOU ACTUALLY BUY
  *
@@ -361,10 +388,20 @@ Context: ${safeContext}.`;
     meter
   });
 
+  if (!out.ok && out.reason === 'timeout' && out.sources?.length) {
+    const decision = fallbackDealDecision(out.sources, out.images ?? []);
+    return {
+      ok:true, partial:true, context:ctx, personalContext,
+      answer:decision?.summary ?? 'Live sources were found, but the ranking model was busy. Open the current sources below while Verafi keeps the evidence grounded.',
+      decision, sources:out.sources, provider:out.provider, costUsd:0,
+      disclaimer:'Research only. Prices and availability must be verified with the merchant.'
+    };
+  }
+
   if (!out.ok) return {
     ok: false, context: ctx, personalContext,
     answer: out.reason === 'timeout'
-      ? 'The search took too long and was stopped. Try a narrower question.'
+      ? 'Live search did not return usable merchant evidence in time. Verafi stopped safely without inventing options; retry the same question.'
       : out.reason === 'privacy_blocked' ? out.detail
       : out.reason === 'search_quota_reached' ? 'The free monthly search allowance has been reached. Search is paused so Verafi cannot incur charges.'
       : out.reason === 'reasoning_quota_reached' ? 'The free daily reasoning allowance has been reached. Try again tomorrow; Verafi will not use a paid fallback.'

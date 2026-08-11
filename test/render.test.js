@@ -36,7 +36,7 @@ S.state={version:'v15',llm:true,linked:true,transactions:161,agents:[{id:'agt_su
   llmProvider:{provider:'openrouter',allowPersonal:false},coverage:{transactions:161,historyDays:365,cards:3,categorisedPct:96,perInstrument:[]},
   agentReview:{coverage:{transactions:161,days:365,attributableToAccount:150},agents:[{id:'subscription_auditor',label:'Subscription Auditor',enabled:true,candidates:5,confirmed:0,needsReview:1,scope:'fixed recurring charges',next:'Review active candidates'}]}};
 S.spend={totalCents:2792200,categories:[{key:'bills',label:'Bills',icon:'📄',cents:1834400,share:65.7,subs:[{key:'rent',cents:1,count:1}],merchants:[{name:'X',cents:1,count:1,sub:'rent'}]}],recent:[],excluded:{},uncategorisedShare:2.5};
-S.save={verifiedTotalCents:0,events:[],opportunities:[],reviewQueue:[],recurringAnnualCents:0};
+S.save={verifiedTotalCents:0,events:[],actions:[],opportunities:[],reviewQueue:[],alerts:[],recurringAnnualCents:0};
 S.forecast={months:Array.from({length:12},(_,i)=>({month:i,projectedCents:300000-i*100,bandLowCents:290000,bandHighCents:310000}))};
 S.dealCats=[{key:'travel',icon:'✈️',label:'Travel',basis:'You spent $6,200 here',budget:2763,asks:['Best value trip under $2763 for my family']},
   {id:'cat1',key:'custom_kids',icon:'ph:baby-bold',label:"Kids' clothes",basis:'Two boys under 5; sizes 4T and 5T',context:'Two boys under 5; sizes 4T and 5T',budget:150,defaultDropPct:20,custom:true,asks:['Find durable kids clothes']}];
@@ -99,12 +99,17 @@ S.watchlist=[{id:'w1',title:'Example Carry-On',url:'https://merchant.example/ite
 await vm.runInContext("approveDeal('w1')",ctx);
 ck('buy action opens merchant directly',openCalls.some(x=>String(x[0]).startsWith('https://merchant.example/item'))&&alertCalls.length===0,JSON.stringify({openCalls,alertCalls}));
 S.save.reviewQueue=[{agent:'subscription_auditor',ref:'subscription:netflix',title:'Review Netflix',detail:'Fixed monthly charge.',amountCents:2499,annualCents:29988,confidence:.9,reviewOnly:true}];
-for (const t of ['ask','spend','save','wallet','agent','settings']) {
+for (const t of ['home','ask','spend','save','wallet','agent','settings']) {
   try { S.tab=t; ctx.render(); ck('tab renders: '+t, els.app.innerHTML.length>200, els.app.innerHTML.length+' chars'); }
   catch(e){ ck('tab renders: '+t, false, e.message); }
 }
+S.tab='home';ctx.render();ck('Home summarizes decisions, spend, savings, agents and watches',els.app.innerHTML.includes('What needs attention')&&els.app.innerHTML.includes('Last 30 days')&&els.app.innerHTML.includes('Agent findings')&&els.app.innerHTML.includes('Price watches'));
+ck('Home routes to cards and accounts without crowding primary navigation',els.app.innerHTML.includes('Cards & accounts'));
 S.tab='spend';ctx.render();ck('spending breakdown moved from Save to Spend',els.app.innerHTML.includes('Where it went')&&els.app.innerHTML.includes('Bills'));
+ck('saved shopping stays out of Spend',!els.app.innerHTML.includes('Example Carry-On')&&els.app.innerHTML.includes('Shopping research and saved products stay in Shop'));
+S.tab='ask';ctx.render();ck('saved shopping stays in Shop',els.app.innerHTML.includes('Example Carry-On')&&els.app.innerHTML.includes('Saved shopping'));
 S.tab='save';ctx.render();ck('Save is a decision queue and potential remains uncounted',els.app.innerHTML.includes('Needs your decision')&&els.app.innerHTML.includes('not counted'));
+S.save.actions=[{id:'sva1',agent:'subscription_auditor',title:'Cancel Netflix',detail:'Cancellation started.',amountCents:2499,annualCents:29988,status:'awaiting_verification'}];ctx.render();ck('Save renders verification lifecycle without counting it',els.app.innerHTML.includes('Awaiting proof')&&els.app.innerHTML.includes('Cancellation confirmed')&&els.app.innerHTML.includes('not counted'));
 ck('Save removes the competing category dashboard and forecast',!els.app.innerHTML.includes('What you actually spend')&&!els.app.innerHTML.includes('12-month forecast'));
 S.tab='agent';ctx.render();ck('agent coverage and candidate depth render',els.app.innerHTML.includes('Transactions reviewed')&&els.app.innerHTML.includes('5 candidates'));
 ck('custom shopping agent is visible',els.app.innerHTML.includes("Kids' clothes")&&els.app.innerHTML.includes('20% default alert'));
@@ -113,5 +118,6 @@ S.tab='ask';S.openDeal=null;S.addCategoryOpen=true;S.answer=null;ctx.render();ck
 S.addCategoryOpen=false;S.answer={kind:'deal',label:'Deal research',ok:true,evidence:[],decision:{summary:'Best.',products:[{name:'Kids Coat',label:'Best',price:120,seller:'Store',url:'https://store.example/coat',highlights:[]}]}};S.lastQuery='kids coat';
 ctx.watchProduct(0);ck('percentage watch sheet renders',els.app.innerHTML.includes('Tell me when the price drops by')&&els.app.innerHTML.includes('recommend')&&els.app.innerHTML.includes('Start monitoring'));
 S.tab='settings';ctx.render();ck('per-source data coverage renders',els.app.innerHTML.includes('Data coverage')&&els.app.innerHTML.includes('365'));
+ck('native prompt and confirm workflows are removed',!js.includes('prompt(')&&!js.includes('confirm(')&&!js.includes('alert('));
 console.log('\n'+(fail?fail+' FAILURES':'render path verified — answers reach the DOM'));
 process.exit(fail?1:0);
