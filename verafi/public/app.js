@@ -23,7 +23,7 @@ const esc = (s) => String(s ?? '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;
 const escAttr = (s) => esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const title = (s) => String(s ?? '').replace(/[-_]/g,' ').replace(/\b\w/g, m => m.toUpperCase());
 
-const S = { tab:'home', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, unknowns:null, taxonomy:null, insight:null, lastQuery:null, spend:null, spendDays:30, save:null, busy:false, error:null, compare:[], compareOpen:false, actionNote:null, addCategoryOpen:false, watchDraft:null, openAgent:null, modal:null };
+const S = { tab:'home', moneyView:'spend', locked:false, state:null, cards:null, presets:null, answer:null, openCat:null, openDeal:null, dealCats:null, watchlist:null, hunts:null, unknowns:null, taxonomy:null, insight:null, lastQuery:null, spend:null, spendDays:30, save:null, busy:false, error:null, compare:[], compareOpen:false, actionNote:null, addCategoryOpen:false, addAgentOpen:false, watchDraft:null, openAgent:null, modal:null };
 
 const ICONS = {
   home:'<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/>',
@@ -34,7 +34,7 @@ const ICONS = {
   agent:'<path d="M12 3 4 6.5v5c0 4.4 3.2 8.3 8 9.5 4.8-1.2 8-5.1 8-9.5v-5L12 3Z"/><path d="m9 12 2 2 4-4"/>'
 };
 
-function go(tab){S.tab=tab;S.openCat=null;S.openDeal=null;render();scrollTo(0,0);}
+function go(tab){if(tab==='spend'||tab==='wallet'){S.moneyView=tab==='wallet'?'cards':'spend';tab='money';}if(tab==='save')tab='home';S.tab=tab;S.openCat=null;S.openDeal=null;render();scrollTo(0,0);}
 function openModal(kind,data={}){S.modal={kind,...data};render();setTimeout(()=>$('modalPrimary')?.focus(),30);}
 function closeModal(){S.modal=null;render();}
 
@@ -42,10 +42,9 @@ async function load() {
   try { S.state = await api('/api/state'); S.locked = false; }
   catch (e) { if (/locked/i.test(e.message)) { S.locked = true; S.state = null; return render(); } throw e; }
   if (S.state.linked) {
-    // Agent evaluation is an explicit capability request, never a hidden mutation in
-    // Home's read endpoint. Load Save first, then refresh the read-only dashboard state.
+    // Every request below is read-only. Agent work runs only after new data, on schedule,
+    // or when the user explicitly taps Run.
     const firstSave = await api('/api/save').catch(e => ({ __failed:'/api/save', __error:e.message }));
-    if(!firstSave.__failed)S.state=await api('/api/state');
     // One missing endpoint must never blank the whole app. Each call fails on its own.
     const safe = (p) => api(p).catch(e => ({ __failed: p, __error: e.message }));
     const [sp, sv, cd, rs, dc, wl, hu, un, ins] = await Promise.all([
@@ -135,13 +134,13 @@ function viewHome() {
   const top=(sp?.categories??[]).slice().sort((a,b)=>b.cents-a.cents)[0];
   const agentReview=st.agentReview?.agents??[];
   const needsSetup=agentReview.filter(a=>a.blocker).length;
-  const latest=findings.slice(0,3);
+  const queue=[...reviews,...actions],workflows=(sv?.actions??[]).filter(a=>a.status==='action_started'||a.status==='awaiting_verification');
   return `
   ${BRAND()}
   <div class="top home-top"><div><span class="eyebrow">Your money, today</span><h1>What needs attention</h1></div><span class="sp"></span>
     <button class="chipbtn" aria-label="Setup" onclick="go('settings')">⚙</button></div>
 
-  <button class="home-priority" onclick="go('${reviews.length||actions.length?'save':'agent'}')">
+  <button class="home-priority" onclick="document.getElementById('actionQueue')?.scrollIntoView({behavior:'smooth'})">
     <span class="priority-icon"><iconify-icon icon="ph:sparkle-fill"></iconify-icon></span>
     <span><small>${reviews.length+actions.length?'Next best action':'Agent check-in'}</small>
       <b>${reviews.length+actions.length?`${reviews.length+actions.length} decision${reviews.length+actions.length===1?'':'s'} waiting`:'Review what your agents checked'}</b>
@@ -149,23 +148,25 @@ function viewHome() {
   </button>
 
   <div class="home-grid">
-    <button onclick="go('spend')"><span>Last 30 days</span><b>${$m0(sp?.totalCents??0)}</b><small>${top?`${esc(top.label)} is the largest category`:'Open spending detail'}</small></button>
-    <button onclick="go('save')"><span>Confirmed saved</span><b class="money-good">${$m0(sv?.verifiedTotalCents??0)}</b><small>${sv?.events?.length??0} completed action${(sv?.events?.length??0)===1?'':'s'}</small></button>
+    <button onclick="go('money')"><span>Last 30 days</span><b>${$m0(sp?.totalCents??0)}</b><small>${top?`${esc(top.label)} is the largest category`:'Open money detail'}</small></button>
+    <button onclick="document.getElementById('actionQueue')?.scrollIntoView({behavior:'smooth'})"><span>Confirmed saved</span><b class="money-good">${$m0(sv?.verifiedTotalCents??0)}</b><small>${sv?.events?.length??0} verified outcome${(sv?.events?.length??0)===1?'':'s'}</small></button>
     <button onclick="go('agent')"><span>Agent findings</span><b>${confirmed+reviews.length}</b><small>${reviews.length} need your review${needsSetup?` · ${needsSetup} need setup`:''}</small></button>
     <button onclick="go('ask')"><span>Price watches</span><b>${watches.length}</b><small>${watches.filter(h=>h.recommendation?.status==='buy_now').length} at buy-now trigger</small></button>
   </div>
 
-  <div class="sec"><span class="lbl">Agent activity</span><button class="act" onclick="go('agent')">See all →</button></div>
-  ${latest.length?latest.map(f=>`<button class="home-finding" onclick="go('${f.reviewOnly?'save':'agent'}')"><span class="finding-dot ${f.reviewOnly?'review':'found'}"></span><span><b>${esc(f.title)}</b><small>${esc(f.detail)}</small></span><em>${f.reviewOnly?'Review':'Evidence'}</em></button>`).join(''):
-    `<button class="home-finding" onclick="go('agent')"><span class="finding-dot neutral"></span><span><b>No surfaced finding yet</b><small>Open Agents to see candidate depth, blockers, and the next investigation for each agent.</small></span><em>Inspect</em></button>`}
+  <div class="sec" id="actionQueue"><span class="lbl">Actions</span><span class="act">shown once</span></div>
+  ${queue.map((o,i)=>`<div class="card decision-card"><div class="decision-status"><span class="badge ${o.reviewOnly?'b-warn':'b-save'}">${o.reviewOnly?'Review':'Ready'}</span><span>${esc(agentName(o.agent))}</span></div><div class="decision-title">${esc(o.title)}</div><div class="decision-detail">${esc(o.detail)}</div><div class="row workflow-actions"><button class="btn go" onclick="${o.reviewOnly?`startReview(${reviews.indexOf(o)})`:`startOpportunity(${actions.indexOf(o)})`}">Start action</button><button class="btn ghost" onclick="markExpected('${escAttr(`${o.agent}:${o.ref}`)}')">Expected · hide</button></div></div>`).join('')}
+  ${workflows.map(a=>`<div class="card decision-card workflow-card"><div class="decision-status"><span class="badge b-warn">${a.status==='awaiting_verification'?'Awaiting proof':'In progress'}</span></div><div class="decision-title">${esc(a.title)}</div><div class="row workflow-actions">${a.status==='action_started'?`<button class="btn ghost" onclick="awaitSaving('${a.id}')">Action submitted</button>`:''}<button class="btn go" onclick="verifySaving('${a.id}','${proofKind(a.agent)}')">${proofLabel(a.agent)}</button><button class="btn ghost" onclick="rejectSaving('${a.id}')">No savings</button></div></div>`).join('')}
+  ${!queue.length&&!workflows.length?`<div class="card empty-decision"><iconify-icon icon="ph:check-circle-bold"></iconify-icon><b>Nothing needs action</b><span>Run Agents after new transactions arrive to check again.</span></div>`:''}
 
   <div class="sec"><span class="lbl">Quick actions</span></div>
   <div class="home-actions">
     <button onclick="go('ask')"><iconify-icon icon="ph:magnifying-glass-bold"></iconify-icon><span><b>Research a purchase</b><small>Compare live options</small></span><em>›</em></button>
-    <button onclick="go('save')"><iconify-icon icon="ph:check-square-offset-bold"></iconify-icon><span><b>Review savings</b><small>Decide what to act on</small></span><em>›</em></button>
-    <button onclick="go('wallet')"><iconify-icon icon="ph:credit-card-bold"></iconify-icon><span><b>Cards & accounts</b><small>${st.coverage?.cards??0} linked cards · balances and rewards</small></span><em>›</em></button>
+    <button onclick="go('money')"><iconify-icon icon="ph:credit-card-bold"></iconify-icon><span><b>Money</b><small>Spending, cards and accounts</small></span><em>›</em></button>
   </div>`;
 }
+
+function viewMoney(){return `${BRAND()}<div class="top"><h1>Money</h1></div><div class="period-picker" role="group" aria-label="Money view"><button class="${S.moneyView==='spend'?'selected':''}" onclick="S.moneyView='spend';render()">Spending</button><button class="${S.moneyView==='cards'?'selected':''}" onclick="S.moneyView='cards';render()">Cards & accounts</button></div>${S.moneyView==='cards'?viewWallet().replace(BRAND(),'').replace('<div class="top"><h1>Cards</h1>','<div class="top" style="display:none"><h1>Cards</h1>'):viewSpend().replace(BRAND(),'').replace('<div class="top"><h1>Spend</h1>','<div class="top" style="display:none"><h1>Spend</h1>')}`;}
 
 /* ---------------------------------------------------------------- shop */
 function viewShop() {
@@ -681,7 +682,7 @@ function viewAgent() {
   ${BRAND()}
   <div class="top"><h1>Agents</h1><span class="sp"></span>
     <button class="chipbtn" onclick="runAgentsNow()">${S.busy?'<span class="spin"></span>':'↻ run'}</button></div>
-  <div class="tiny muted">${(st.agents??[]).filter(a=>a.enabled).length} of ${(st.agents??[]).length} running · every 24h</div>
+  <div class="tiny muted">${(st.customAgents??[]).filter(a=>a.enabled&&a.method==='ai').length} AI agent${(st.customAgents??[]).filter(a=>a.enabled&&a.method==='ai').length===1?'':'s'} active · financial controls and agents run after new data, daily, or when you tap Run</div>
 
   <div class="agent-brief">
     <div><span>Transactions reviewed</span><b>${review.coverage.transactions??0}</b></div>
@@ -689,19 +690,9 @@ function viewAgent() {
     <div><span>Account-attributed</span><b>${review.coverage.attributableToAccount??0}</b></div>
   </div>
 
-  ${S.insight?.ok ? `<div class="card" style="border-color:var(--spend)">
-    <div class="tiny muted">Latest agent readout</div>
-    <div style="font-weight:650;font-size:14px;line-height:1.5;margin-top:6px">${esc(S.insight.headline)}</div>
-  </div>` : ''}
+  <div class="card"><div style="font-weight:700;font-size:13.5px">How agents work</div><div class="tiny muted" style="margin-top:5px;line-height:1.6">Built-in controls use transparent financial logic. Your agents use ${st.llmProvider?.allowPersonal?`${esc(st.llmProvider.provider)} to investigate a plain-English goal, then Verafi verifies every cited transaction and dollar total in code.`:'a private AI provider when one is connected. Until then, they pause without sending or inventing financial data.'} Every consequential action still requires your approval.</div></div>
 
-  <div class="card" style="border-color:${st.llmProvider?.allowPersonal?'var(--save)':'var(--warn)'}">
-    <div style="font-weight:700;font-size:13.5px">Reasoning status · ${st.llmProvider?.allowPersonal?'hybrid':'local analysis only'}</div>
-    <div class="tiny muted" style="margin-top:5px;line-height:1.6">${st.llmProvider?.allowPersonal
-      ? `Detectors calculate exact candidates locally; ${esc(st.llmProvider.provider)} prioritizes and explains them.`
-      : 'The free model is not receiving personal transaction data. Detectors still run locally, but an LLM has not independently investigated each agent. Verafi will not pretend otherwise.'}</div>
-  </div>
-
-  <div class="sec"><span class="lbl">Your agents</span></div>
+  <div class="sec"><span class="lbl">Built-in financial controls</span><span class="act">verified in code</span></div>
   ${(st.agents ?? []).map((a,i)=>{
     const audit=review.agents?.find(x=>x.label===a.name);
     const mine = f.filter(x => x.agent === (audit?.id ?? a.name.toLowerCase().replace(/\s+/g,'_')));
@@ -713,11 +704,8 @@ function viewAgent() {
             <span class="badge b-spend">${esc(a.surface)}</span>
             ${mine.length?`<span class="badge b-save">${mine.length} found</span>`:''}</div>
           <div class="agent-counts"><span>${audit?.candidates??0} candidates</span><span>${audit?.confirmed??0} confirmed</span><span>${audit?.needsReview??0} need review</span></div>
-          <div class="tiny muted" style="margin-top:7px;line-height:1.55">${a.enabled
-            ? (mine.length ? esc(mine[0].detail ?? mine[0].title)
-              : esc(audit?.result??`No usable evidence was available for ${audit?.scope??'this investigation'}.`))
-            : `Off — ${esc(audit?.scope??'no analysis is being run')}.`}</div>
-          <div class="tiny" style="color:var(--dim);margin-top:6px">Next: ${esc(audit?.next??CAP[a.capability]??a.capability)}</div>
+          <div class="tiny muted" style="margin-top:7px;line-height:1.55">${a.enabled?esc(audit?.result??'Ready to run.'):'Off'}</div>
+          <div class="tiny" style="color:var(--dim);margin-top:6px">Method: Rules · ${esc(audit?.scope??'transaction analysis')}</div>
         </div>
         <button class="tog ${a.enabled?'on':''}" role="switch" aria-checked="${a.enabled}" aria-label="${a.enabled?'Disable':'Enable'} ${escAttr(a.name)}" onclick="toggleAgent('${a.id}',${!a.enabled})"><i></i></button>
       </div>
@@ -743,6 +731,10 @@ function viewAgent() {
     <div class="tiny muted" style="margin-top:5px;line-height:1.55">${esc(h.summary)}</div><div class="tiny" style="color:var(--dim);margin-top:6px">${esc(h.recommendation?.detail??'Waiting for its first price check.')}</div></div>
     <button class="tog ${h.enabled?'on':''}" role="switch" aria-checked="${h.enabled}" aria-label="${h.enabled?'Disable':'Enable'} ${escAttr(h.name)}" onclick="toggleHunt('${h.id}',${!h.enabled})"><i></i></button></div>
     <button class="agent-expand" onclick="runHunt('${h.id}')">Check current price <span>→</span></button></div>`).join('')}`:''}
+
+  <div class="sec"><span class="lbl">Your custom agents</span><button class="act" onclick="S.addAgentOpen=!S.addAgentOpen;render()">${S.addAgentOpen?'Close':'+ Create agent'}</button></div>
+  ${S.addAgentOpen?`<form class="card" onsubmit="createCustomAgent(event)"><label>Name<input id="agentName" required maxlength="60" placeholder="Subscription usage investigator"></label><label>What should this agent investigate?<textarea id="agentGoal" required minlength="12" maxlength="500" rows="4" placeholder="Find subscriptions that look redundant or unused. Ask me when transactions alone cannot prove usage."></textarea></label><button class="btn go" type="submit">Create and investigate</button><div class="tiny muted" style="margin-top:8px">Method: AI investigation with transaction and dollar verification in code. Recommendations only; actions require your approval.</div></form>`:''}
+  ${(st.customAgents??[]).map(a=>`<div class="card agent-card"><div class="row"><div class="grow"><div class="row" style="gap:6px"><b>${esc(a.name)}</b><span class="badge b-spend">AI</span></div><div class="tiny muted" style="margin-top:5px;line-height:1.5">${esc(a.goal??'Legacy rules agent — recreate it with a plain-English goal.')}</div><div class="tiny" style="color:var(--dim);margin-top:6px">${a.lastStatus==='needs_input'?`Needs your input: ${esc(a.followUp??'Open the agent to continue.')}`:a.lastSummary?esc(a.lastSummary):a.lastStatus==='blocked'?esc(a.blocker??'Connect AI to run.'):'Ready to investigate'}</div></div><button class="tog ${a.enabled?'on':''}" role="switch" aria-checked="${a.enabled}" aria-label="${a.enabled?'Disable':'Enable'} ${escAttr(a.name)}" onclick="toggleCustomAgent('${a.id}',${!a.enabled})"><i></i></button></div></div>`).join('')||`<div class="card"><div class="tiny muted">No custom agents yet.</div></div>`}
 
   <div class="sec"><span class="lbl">Activity log</span><span class="act">${(st.runs??[]).length} runs</span></div>
   <div class="card">
@@ -928,6 +920,9 @@ async function refresh() {
 async function setSpendDays(days){S.spendDays=days;S.busy=true;render();try{S.spend=await api(`/api/spend?days=${days}`);}catch(e){S.error=e.message;}S.busy=false;render();}
 
 async function toggleAgent(id, enabled) { await api('/api/agents/toggle', { id, enabled }); await load(); }
+async function toggleCustomAgent(id,enabled){await api('/api/custom-agents/toggle',{id,enabled});await load();}
+async function createCustomAgent(event){event.preventDefault();S.busy=true;render();try{await api('/api/agents',{name:$('agentName')?.value,goal:$('agentGoal')?.value});await api('/api/agents/run',{});S.addAgentOpen=false;await load();}catch(e){S.error=e.message;}S.busy=false;render();}
+async function markExpected(key){S.busy=true;render();try{await api('/api/findings/expected',{key});await load();}catch(e){S.error=e.message;}S.busy=false;render();}
 
 async function runAgentsNow() {
   S.busy = true; S.error = null; render();
@@ -975,7 +970,8 @@ function render() {
     : !st ? '<div class="empty"><span class="spin"></span></div>'
     : !st.linked ? viewOnboard()
     : S.tab === 'home' ? viewHome()
-    : S.tab === 'spend' ? viewSpend()
+    : S.tab === 'money' ? viewMoney()
+    : S.tab === 'spend' ? viewMoney()
     : S.tab === 'settings' ? viewSettings()
     : S.tab === 'wallet' ? viewWallet()
     : S.tab === 'agent' ? viewAgent()
@@ -984,9 +980,9 @@ function render() {
 
   if (S.locked) { $('tabs').innerHTML = ''; setTimeout(()=>$('pc')?.focus(), 60); return; }
   $('tabs').innerHTML = !st?.linked ? '' :
-    [['home','Home'],['ask','Shop'],['spend','Spend'],['save','Save'],['wallet','Cards'],['agent','Agents']].map(([k,l])=>
+    [['home','Home'],['ask','Shop'],['money','Money'],['agent','Agents']].map(([k,l])=>
       `<button class="${S.tab===k?'on':''}" aria-current="${S.tab===k?'page':'false'}" onclick="go('${k}')">
-         <svg viewBox="0 0 24 24">${ICONS[k]}</svg>${l}</button>`).join('');
+         <svg viewBox="0 0 24 24">${ICONS[k==='money'?'spend':k]}</svg>${l}</button>`).join('');
 
   const d = $('drop');
   if (d) ['dragover','dragleave','drop'].forEach(ev => d.addEventListener(ev, e => {

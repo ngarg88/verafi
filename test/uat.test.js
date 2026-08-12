@@ -36,7 +36,7 @@ writeFileSync(join(temp,'verafi.json'),JSON.stringify({
     {id:'checking',rail:'card_debit',displayName:'Checking ···1000',balanceCents:500000},
     {id:'card-amex',rail:'card_credit',displayName:'Gold ···2000',cardKey:'amex_gold'},
     {id:'card-citi',rail:'card_credit',displayName:'Double Cash ···3000',cardKey:'citi_dc'}
-  ],transactions,agents:[],mandates:[],rules:[],runs:[],savings:[],savingsActions:[],cursors:{},customCategories:[],hunts:[],watchlist:[],findings:[],seenFindings:{},dismissed:{}
+  ],transactions,agents:[],customAgents:[],mandates:[],rules:[],runs:[],savings:[],savingsActions:[],cursors:{},customCategories:[],hunts:[],watchlist:[],findings:[],seenFindings:{},dismissed:{}
 },null,2));
 
 const child=spawn(process.execPath,['verafi/server.js'],{cwd:process.cwd(),env:{...process.env,PORT:String(PORT),HOST:'127.0.0.1',DATA_DIR:temp,
@@ -53,9 +53,13 @@ try{
   const health=await get('/api/health');
   ck('startup and health',()=>assert.equal(health.ok,true));
 
+  const initial=await get('/api/state');
+  ck('Page load is read-only and does not run agents',()=>assert.equal(initial.findings.length,0));
+  await post('/api/agents/run',{});
+
   const state=await get('/api/state');
   ck('Home data contract',()=>{assert.ok(state.coverage.transactions>=transactions.length);assert.ok(state.agentReview.agents.length>=9);});
-  ck('Home receives fresh agent findings on first load',()=>assert.ok(state.findings.length>=4));
+  ck('Home receives findings after an explicit agent run',()=>assert.ok(state.findings.length>=4));
   ck('multi-account coverage',()=>{assert.equal(state.coverage.cards,2);assert.equal(state.coverage.legacyConnections,0);});
   ck('Agents explain completed investigations',()=>assert.ok(state.agentReview.agents.every(a=>typeof a.result==='string'&&a.result.length>10)));
 
@@ -71,6 +75,16 @@ try{
   ck('Card routing uses proven card attribution',()=>assert.ok(save.opportunities.some(f=>f.agent==='card_router')));
   ck('Discretionary drift works without time-of-day',()=>assert.ok(save.alerts.some(f=>f.agent==='weekend_drift')));
   ck('Behavioral alerts cannot be claimed as savings',()=>assert.ok(save.opportunities.every(f=>!f.alertOnly)));
+  const wire=save.opportunities.find(f=>/wire transfer fee/i.test(f.title));
+  await post('/api/findings/expected',{key:`${wire.agent}:${wire.ref}`});
+  const afterExpected=await get('/api/save');
+  ck('Intentional fee can be hidden once across the product',()=>assert.ok(!afterExpected.opportunities.some(f=>`${f.agent}:${f.ref}`===`${wire.agent}:${wire.ref}`)));
+
+  const custom=await post('/api/agents',{name:'Dining pattern investigator',goal:'Investigate whether my recent restaurant spending changed materially and show the supporting transactions.'});
+  ck('Custom agent persists as an AI investigation agent',()=>{assert.equal(custom.agent.method,'ai');assert.equal(custom.agent.approvalRequired,true);});
+  const customRun=await post('/api/agents/run',{});
+  const customState=await get('/api/state');
+  ck('AI agent pauses honestly when no private model is configured',()=>{assert.equal(customRun.ai.status,'blocked');assert.equal(customState.customAgents.find(a=>a.id===custom.agent.id).lastStatus,'blocked');});
 
   const candidate=save.reviewQueue.find(f=>f.agent==='subscription_auditor');
   const started=await post('/api/save/actions/start',{findingKey:`${candidate.agent}:${candidate.ref}`});

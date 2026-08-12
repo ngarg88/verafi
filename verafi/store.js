@@ -10,6 +10,7 @@ const EMPTY = {
   connections: [], instruments: [], transactions: [], agents: [],
   mandates: [], rules: [], runs: [], savings: [], savingsActions: [], cursors: {},
   customCategories: [], hunts: [], watchlist: [], imports: [], notificationHistory: []
+  , customAgents: []
 };
 
 export class Store {

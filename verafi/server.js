@@ -23,6 +23,7 @@ import { RESEARCH, ask as askResearch } from './research.js';
 import { isDealQuery, researchDeal, spendingContext, COST, dealPresets, holdDeal, approvalSummary, makeDealCategory } from './deals.js';
 import { makeRule, describe as describeRule, runRule, dueRules, SOURCE, recommendWatch } from './rules.js';
 import { hasLLM, providerInfo, categoriseMerchants, interpretFindings, monthlyNarrative } from './llm.js';
+import { runAIAgents } from './ai-agents.js';
 
 /** Per-month meter shared by every model call, so one cap covers the whole app. */
 function meterNow() {
@@ -115,6 +116,21 @@ function findingKey(f) { return `${f.agent}:${f.ref}`; }
 function savingAction(id) { return (D.savingsActions??[]).find(a=>a.id===id); }
 function savingActionByFinding(f) { return (D.savingsActions??[]).find(a=>a.findingKey===findingKey(f)&&a.status!=='rejected'); }
 function publicSavingActions() { return (D.savingsActions??[]).slice().sort((a,b)=>b.updatedAt-a.updatedAt); }
+function verifiedSavingsEvents(){
+  const verified=new Set((D.savingsActions??[]).filter(a=>a.status===SAVING_ACTION_STATUS.VERIFIED).map(a=>a.findingKey));
+  return (D.savings??[]).filter(e=>e.status==='verified'&&e.evidence?.findingKey&&verified.has(e.evidence.findingKey));
+}
+function saveSnapshot(){
+  const all=D.findings??[],events=verifiedSavingsEvents();
+  const claimable=all.filter(f=>!f.alertOnly&&!f.reviewOnly);
+  return {verifiedTotalCents:verifiedTotalCents(events),events,actions:publicSavingActions(),
+    opportunities:all.filter(f=>!f.reviewOnly&&!f.alertOnly&&!savingActionByFinding(f)),
+    reviewQueue:all.filter(f=>f.reviewOnly&&!savingActionByFinding(f)),alerts:all.filter(f=>f.alertOnly),
+    recurringAnnualCents:claimable.filter(f=>!f.oneOff).reduce((a,f)=>a+f.annualCents,0),
+    oneOffCents:claimable.filter(f=>f.oneOff).reduce((a,f)=>a+f.annualCents,0),
+    agentsEnabled:D.agents.filter(a=>a.enabled).length+(D.customAgents??[]).filter(a=>a.enabled).length,
+    agentsAvailable:D.agents.length+(D.customAgents??[]).length};
+}
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -224,9 +240,9 @@ const ROUTES = {
       authRequired: authRequired(), findings: D.findings ?? [],
       linked: !!D.profile.linkedAt, transactions: tx.length,
       connections: D.connections.map(c => ({ id:c.id, institution:c.institution, accounts:c.accounts, linkedAt:c.linkedAt })),
-      instruments: D.instruments, agents: D.agents, signals,
+      instruments: D.instruments, agents: D.agents, customAgents:D.customAgents??[], signals,
       coverage:dataCoverage(), agentReview:reviewAgents({ data:D, cardRules:CARD_RULES }),
-      savings: { verifiedTotalCents: verifiedTotalCents(D.savings), events: D.savings.slice(0, 30) },
+      savings: { verifiedTotalCents: verifiedTotalCents(verifiedSavingsEvents()), events: verifiedSavingsEvents().slice(0, 30) },
       mandate: ensureRootMandate(), runs: D.runs.slice(0, 12).map(r => ({ ...r, steps: r.steps.length })),
       imports:(D.imports??[]).slice(0,12),notifications:(D.notificationHistory??[]).slice(0,20)
     };
@@ -341,21 +357,7 @@ const ROUTES = {
   },
 
   'GET /api/save': async () => {
-    // Opportunities come straight from the agents, so every line has a title AND an
-    // explanation. A number with no detail is not something you can act on.
-    const { all, recurringAnnualCents, oneOffCents } = runAgents({ store, cardRules: CARD_RULES });
-    return {
-      verifiedTotalCents: verifiedTotalCents(D.savings),
-      events: D.savings,
-      actions: publicSavingActions(),
-      opportunities: all.filter(f=>!f.reviewOnly&&!f.alertOnly&&!savingActionByFinding(f)),
-      reviewQueue: all.filter(f=>f.reviewOnly&&!savingActionByFinding(f)),
-      alerts: all.filter(f=>f.alertOnly),
-      recurringAnnualCents, oneOffCents,
-      totalAnnualOpportunityCents: recurringAnnualCents,
-      agentsEnabled: D.agents.filter(a => a.enabled).length,
-      agentsAvailable: D.agents.length
-    };
+    return saveSnapshot();
   },
 
   'POST /api/save/actions/start': async (b) => {
@@ -410,12 +412,16 @@ const ROUTES = {
     a.enabled = !!b.enabled; store.save(); return { agent: a };
   },
   'POST /api/agents': async (b) => {
-    if (!b.evidence || b.evidence.length < 10) return { status:422, error:'an agent must cite what it learned' };
-    const a = { ...makeAgent({ id:'agt_'+Date.now().toString(36), userId:'me', surface:b.surface,
-      name:b.name, capability: b.capability ?? CAPABILITY.RECOMMEND, enabled:false, custom:true }),
-      evidence:b.evidence, confidence: 1, ceilingCents: b.ceilingCents ?? null };
-    D.agents.push(a); store.save(); return { agent: a };
+    const name=String(b.name??'').trim();
+    if(name.length<3)return {status:422,error:'Give the agent a clear name.'};
+    const goal=String(b.goal??'').trim();
+    if(goal.length<12)return {status:422,error:'Describe what you want the AI agent to investigate.'};
+    const a={id:'cag_'+Date.now().toString(36),name:name.slice(0,60),goal:goal.slice(0,500),enabled:true,custom:true,method:'ai',
+      capability:'recommend',approvalRequired:true,createdAt:Date.now(),lastRunAt:null,lastStatus:'ready'};
+    D.customAgents.push(a);store.save();return {agent:a};
   },
+  'POST /api/custom-agents/toggle': async (b)=>{const a=(D.customAgents??[]).find(x=>x.id===b.id);if(!a)return {status:404,error:'not found'};a.enabled=!!b.enabled;store.save();return {agent:a};},
+  'POST /api/findings/expected': async (b)=>{const f=(D.findings??[]).find(x=>findingKey(x)===b.key);if(!f)return {status:404,error:'Finding not found.'};D.dismissed??={};D.dismissed[b.key]={at:Date.now(),signature:JSON.stringify([f.amountCents,f.annualCents,f.title,f.evidence??{}]),reason:'expected'};D.findings=D.findings.filter(x=>findingKey(x)!==b.key);store.save();return {ok:true};},
   'GET /api/cards': async () => {
     const keys = new Set();
     for (const cat of Object.values(CARD_RULES)) for (const k of Object.keys(cat)) keys.add(k);
@@ -470,7 +476,9 @@ const ROUTES = {
   /** Run every enabled agent now. Also what the daily schedule calls. */
   'POST /api/agents/run': async () => {
     const run = store.startRun('agents');
-    const { all, fresh } = runAgents({ store, cardRules: CARD_RULES });
+    const builtIn = runAgents({ store, cardRules: CARD_RULES });
+    const ai = await runAIAgents({ store, meter:meterNow() });
+    const all=D.findings??[],fresh=[...builtIn.fresh,...ai.fresh];
     store.step(run, 'agents.run', { enabled: D.agents.filter(a=>a.enabled).map(a=>a.name) },
       { findings: all.length, fresh: fresh.length });
     let channel = null;
@@ -483,7 +491,7 @@ const ROUTES = {
       } catch (e) { store.step(run, 'notify', {}, { error: e.message }); }
     }
     store.finishRun(run);
-    return { findings: all, fresh, notified: channel };
+    return { findings: all, fresh, notified: channel, ai:{status:ai.status,provider:ai.provider,blocker:ai.blocker} };
   },
 
   'GET /api/findings': async () => ({
@@ -649,7 +657,7 @@ const ROUTES = {
    * make the whole app appear dead - which is exactly what it just did.
    */
   'GET /api/insight': async () => {
-    const { all } = runAgents({ store, cardRules: CARD_RULES });
+    const all = D.findings ?? [];
     if (!hasLLM()) return { ok:false, reason:'no_api_key', findings: all.length,
       note:'Findings are computed. Add an API key and the agent will tell you which ones matter and why.' };
     const key = 'insight:' + all.length + ':' + (all[0]?.ref ?? '');
@@ -673,7 +681,7 @@ const ROUTES = {
     const tx = expensesOnly(store.tx());
     const cats = categoriseAll(tx, D.learned).slice(0,8)
       .map(c=>`${c.label} $${Math.round(c.cents/100)} (${c.share}%)`).join(', ');
-    const { all } = runAgents({ store, cardRules: CARD_RULES });
+    const all = D.findings ?? [];
     const out = await monthlyNarrative({ context: spendingContext(store.tx()).summary,
       categories: cats, findings: all.slice(0,5).map(f=>f.title).join('; '), meter: meterNow() });
     store.save();
@@ -779,7 +787,9 @@ async function scheduled() {
       } catch (e) { console.error('hunt failed:', h.name, e.message); }
     }
     store.save();
-    const { fresh } = runAgents({ store, cardRules: CARD_RULES });
+    const builtIn = runAgents({ store, cardRules: CARD_RULES });
+    const ai = await runAIAgents({ store, meter:meterNow() });
+    const fresh = [...builtIn.fresh,...ai.fresh];
     if (fresh.length) await notify({
       title: `Verafi found ${fresh.length} thing${fresh.length>1?'s':''} worth $${Math.round(fresh.reduce((a,f)=>a+f.annualCents,0)/100)}/yr`,
       lines: fresh.slice(0,6).map(f => `${f.title} — ${f.detail}`),
@@ -806,7 +816,9 @@ setInterval(async () => {
       } catch (e) { console.error('hunt failed:', h.name, e.message); }
     }
     store.save();
-    const { fresh } = runAgents({ store, cardRules: CARD_RULES });
+    const builtIn = runAgents({ store, cardRules: CARD_RULES });
+    const ai = await runAIAgents({ store, meter:meterNow() });
+    const fresh = [...builtIn.fresh,...ai.fresh];
     if (fresh.length) await notify({
       title: `Verafi found ${fresh.length} thing${fresh.length>1?'s':''} worth $${Math.round(fresh.reduce((a,f)=>a+f.annualCents,0)/100)}/yr`,
       lines: fresh.slice(0,6).map(f => `${f.title} — ${f.detail}`),
@@ -815,7 +827,8 @@ setInterval(async () => {
 }, 60_000);
 
 await scanStatements();
-runAgents({ store, cardRules: CARD_RULES });
+// Agent analysis runs after new data arrives, on the daily schedule, or when the user
+// explicitly requests it. Starting the server and reading screens stay fast/read-only.
 
 server.listen(PORT, HOST, () => {
   let lan = [];

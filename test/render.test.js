@@ -32,7 +32,7 @@ let fail=0; const ck=(n,c,x='')=>{console.log((c?'  ok  ':'  FAIL')+'  '+n+(x?' 
 
 // realistic state, as the server actually returns it
 S.locked=false;
-S.state={version:'v15',llm:true,linked:true,transactions:161,agents:[{id:'agt_sub',name:'Subscription Auditor',surface:'save',capability:'recommend',enabled:true}],connections:[],instruments:[],findings:[],runs:[],
+S.state={version:'v15',llm:true,linked:true,transactions:161,agents:[{id:'agt_sub',name:'Subscription Auditor',surface:'save',capability:'recommend',enabled:true}],customAgents:[],connections:[],instruments:[],findings:[],runs:[],
   llmProvider:{provider:'openrouter',allowPersonal:false},coverage:{transactions:161,historyDays:365,cards:3,categorisedPct:96,perInstrument:[]},
   agentReview:{coverage:{transactions:161,days:365,attributableToAccount:150},agents:[{id:'subscription_auditor',label:'Subscription Auditor',enabled:true,candidates:5,confirmed:0,needsReview:1,scope:'fixed recurring charges',next:'Review active candidates'}]}};
 S.spend={totalCents:2792200,categories:[{key:'bills',label:'Bills',icon:'📄',cents:1834400,share:65.7,subs:[{key:'rent',cents:1,count:1}],merchants:[{name:'X',cents:1,count:1,sub:'rent'}]}],recent:[],excluded:{},uncategorisedShare:2.5};
@@ -104,7 +104,7 @@ for (const t of ['home','ask','spend','save','wallet','agent','settings']) {
   catch(e){ ck('tab renders: '+t, false, e.message); }
 }
 S.tab='home';ctx.render();ck('Home summarizes decisions, spend, savings, agents and watches',els.app.innerHTML.includes('What needs attention')&&els.app.innerHTML.includes('Last 30 days')&&els.app.innerHTML.includes('Agent findings')&&els.app.innerHTML.includes('Price watches'));
-ck('Home routes to cards and accounts without crowding primary navigation',els.app.innerHTML.includes('Cards & accounts'));
+ck('Home routes to combined Money without crowding primary navigation',els.app.innerHTML.includes('Spending, cards and accounts'));
 S.tab='spend';ctx.render();ck('spending breakdown moved from Save to Spend',els.app.innerHTML.includes('Where it went')&&els.app.innerHTML.includes('Bills'));
 ck('saved shopping stays out of Spend',!els.app.innerHTML.includes('Example Carry-On')&&els.app.innerHTML.includes('Shopping research and saved products stay in Shop'));
 S.tab='ask';ctx.render();ck('saved shopping stays in Shop',els.app.innerHTML.includes('Example Carry-On')&&els.app.innerHTML.includes('Saved shopping'));
@@ -112,6 +112,7 @@ S.tab='save';ctx.render();ck('Save is a decision queue and potential remains unc
 S.save.actions=[{id:'sva1',agent:'subscription_auditor',title:'Cancel Netflix',detail:'Cancellation started.',amountCents:2499,annualCents:29988,status:'awaiting_verification'}];ctx.render();ck('Save renders verification lifecycle without counting it',els.app.innerHTML.includes('Awaiting proof')&&els.app.innerHTML.includes('Cancellation confirmed')&&els.app.innerHTML.includes('not counted'));
 ck('Save removes the competing category dashboard and forecast',!els.app.innerHTML.includes('What you actually spend')&&!els.app.innerHTML.includes('12-month forecast'));
 S.tab='agent';ctx.render();ck('agent coverage and candidate depth render',els.app.innerHTML.includes('Transactions reviewed')&&els.app.innerHTML.includes('5 candidates'));
+ck('built-in rules are labeled as financial controls',els.app.innerHTML.includes('Built-in financial controls')&&els.app.innerHTML.includes('Method: Rules'));
 ck('custom shopping agent is visible',els.app.innerHTML.includes("Kids' clothes")&&els.app.innerHTML.includes('20% default alert'));
 S.openAgent='agt_sub';ctx.render();ck('per-agent investigation expands',els.app.innerHTML.includes('What it checked')&&els.app.innerHTML.includes('Current result')&&els.app.innerHTML.includes('Next action'));
 S.tab='ask';S.openDeal=null;S.addCategoryOpen=true;S.answer=null;ctx.render();ck('custom category builder renders',els.app.innerHTML.includes('Create a shopping agent')&&els.app.innerHTML.includes("Kids' clothes"));
@@ -119,5 +120,6 @@ S.addCategoryOpen=false;S.answer={kind:'deal',label:'Deal research',ok:true,evid
 ctx.watchProduct(0);ck('percentage watch sheet renders',els.app.innerHTML.includes('Tell me when the price drops by')&&els.app.innerHTML.includes('recommend')&&els.app.innerHTML.includes('Start monitoring'));
 S.tab='settings';ctx.render();ck('per-source data coverage renders',els.app.innerHTML.includes('Data coverage')&&els.app.innerHTML.includes('365'));
 ck('native prompt and confirm workflows are removed',!js.includes('prompt(')&&!js.includes('confirm(')&&!js.includes('alert('));
+S.tab='home';ctx.render();ck('primary navigation has four destinations',(els.tabs.innerHTML.match(/<button/g)||[]).length===4&&els.tabs.innerHTML.includes('Money')&&!els.tabs.innerHTML.includes('Save'));
 console.log('\n'+(fail?fail+' FAILURES':'render path verified — answers reach the DOM'));
 process.exit(fail?1:0);
